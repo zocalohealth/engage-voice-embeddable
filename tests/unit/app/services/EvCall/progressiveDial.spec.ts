@@ -29,7 +29,7 @@ function setup() {
     outboundSettings: { outdialGroup: { dialGroupId: 'group-1' } },
   };
   const sdk = { previewDial: jest.fn(), socket: { readyState: 1 }, _getUIModel: () => ({ getInstance: () => model }) };
-  const client = Object.assign(Object.create(EvClient.prototype), { _sdk: sdk, appStatus: evStatus.LOGINED });
+  const client = Object.assign(Object.create(EvClient.prototype), { _sdk: sdk, appStatus: evStatus.CONNECTED });
   const presence = {
     calls: [] as unknown[], dialoutStatus: dialoutStatuses.idle,
     setCurrentCallUii: jest.fn(),

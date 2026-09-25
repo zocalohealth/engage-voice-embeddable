@@ -23,7 +23,7 @@ const lead = (id = '1'): Lead => ({
 
 function setup(shared = false) {
   const listeners: Record<string, (data?: any) => void> = {};
-  const client = { appStatus: evStatus.LOGINED, getPreviewDial: jest.fn().mockResolvedValue({ leads: [lead()] }) };
+  const client = { appStatus: evStatus.CONNECTED, getPreviewDial: jest.fn().mockResolvedValue({ leads: [lead()] }) };
   const auth = { isEvLogged: true, beforeAgentLogout: jest.fn(), agentPermissions: { allowOutbound: true, progressiveEnabled: true }, agentConfig: { outboundSettings: { outdialGroup: { dialGroupId: 'group-1', dialMode: 'PREVIEW', progressiveCallDelay: '3' } } } };
   const session = { configSuccess: true, configuring: false, onTriggerConfig: jest.fn() };
   const presence = { isOffhook: true, isOffhooking: false, calls: [] as unknown[] };
@@ -50,6 +50,13 @@ function setup(shared = false) {
 const advance = async (ms = 1000) => { await jest.advanceTimersByTimeAsync(ms); };
 
 describe('progressive dialing', () => {
+  it('enables Start after the authenticated agent socket opens', () => {
+    const d = setup();
+    d.client.appStatus = evStatus.LOGINED;
+    expect(d.dialer.canStart).toBe(false);
+    d.client.appStatus = evStatus.CONNECTED;
+    expect(d.dialer.canStart).toBe(true);
+  });
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
 

@@ -115,7 +115,7 @@ export class EvProgressiveDialer extends RcModule {
 
   private get sessionReady(): boolean {
     return this.evAuth.isEvLogged && this.evAgentSession.configSuccess &&
-      !this.evAgentSession.configuring && this.evClient.appStatus === evStatus.LOGINED;
+      !this.evAgentSession.configuring && this.evClient.appStatus === evStatus.CONNECTED;
   }
 
   @action

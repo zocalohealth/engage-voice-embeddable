@@ -60,7 +60,7 @@ class EvCall extends RcModule {
   }
 
   get canProgressiveDial(): boolean {
-    return this.evClient.appStatus === evStatus.LOGINED &&
+    return this.evClient.appStatus === evStatus.CONNECTED &&
       this.evAuth.agentPermissions?.allowOutbound === true &&
       this.evAuth.isEvLogged && this.evAgentSession.configSuccess &&
       !this.evAgentSession.configuring && this.evAuth.agentPermissions?.progressiveEnabled === true &&
