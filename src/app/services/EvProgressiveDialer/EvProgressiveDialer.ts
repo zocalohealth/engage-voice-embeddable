@@ -29,6 +29,7 @@ export class EvProgressiveDialer extends RcModule {
   private deadline = 0;
   private fetching = false;
   private pendingRequest = '';
+  private notificationLead?: Lead;
   private callUii = '';
   private sentAt = 0;
   private connected = false;
@@ -58,7 +59,16 @@ export class EvProgressiveDialer extends RcModule {
       this.evCall.beforeManualDial(() => this.stop());
       this.evSubscription.subscribe(EvCallbackTypes.NEW_CALL, (call) => {
         if (this.pendingRequest && !this.callUii) {
-          if (call.callType === 'OUTBOUND' && !call.isMonitoring) this.callUii = call.uii;
+          if (call.callType === 'OUTBOUND' && !call.isMonitoring) {
+            this.callUii = call.uii;
+            const lead = this.notificationLead;
+            this.notificationLead = undefined;
+            if (lead) {
+              // RingCX selects the destination; the lead may contain several numbers.
+              void this.adapter.onCallLead(lead, call.dnisE164 || call.dnis || call.dialDest || '')
+                .catch(() => this.logger.warn('progressiveDialer', { event: 'notificationFailed' }));
+            }
+          }
           else void this.stop();
         }
       });
@@ -160,6 +170,7 @@ export class EvProgressiveDialer extends RcModule {
 
   private finishAttempt() {
     this.pendingRequest = '';
+    this.notificationLead = undefined;
     this.callUii = '';
     this.sentAt = 0;
     this.deadline = 0;
@@ -220,6 +231,7 @@ export class EvProgressiveDialer extends RcModule {
     const requestKey = `${this.groupId}:${lead.requestId}`;
     this.attempted.add(requestKey);
     this.pendingRequest = lead.requestId;
+    this.notificationLead = lead;
     this.sentAt = Date.now();
     this.setState(true, 'waiting');
     try {
@@ -230,8 +242,6 @@ export class EvProgressiveDialer extends RcModule {
         if (this.generation === generation) await this.stop();
         return;
       }
-      const destination = lead.destinationE164 || (Array.isArray(lead.destination) ? lead.destination[0] : lead.destination?.split('|')[0]);
-      await this.adapter.onCallLead(lead, destination || '');
       this.logger.info('progressiveDialer', { event: 'dialRequested' });
     } catch {
       // A failed/ambiguous send is never retried automatically.

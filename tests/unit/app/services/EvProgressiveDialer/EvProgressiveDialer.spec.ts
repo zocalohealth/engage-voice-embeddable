@@ -3,11 +3,15 @@ jest.mock('@ringcentral-integration/next-core', () => ({
   action: (_t: any, _k: string, descriptor: PropertyDescriptor) => descriptor,
   delegate: () => (_t: any, _k: string, descriptor: PropertyDescriptor) => descriptor,
   state: () => undefined,
+  storage: () => undefined,
+  optional: () => () => undefined,
   watch: jest.fn(),
   RcModule: class { logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() }; },
   PortManager: class {},
 }));
 
+import { Adapter } from 'src/app/services/Adapter';
+import { adapterMessageTypes } from 'src/enums';
 import { EvProgressiveDialer } from 'src/app/services/EvProgressiveDialer';
 import { EvCallbackTypes, evStatus } from 'src/app/services/EvClient/enums';
 import type { Lead } from 'src/app/services/EvLeads';
@@ -28,10 +32,19 @@ function setup(shared = false) {
   const leads = { leads: [] as Lead[], loading: false, leadStatesMapping: {} as Record<string, string>, setLoading: jest.fn((v) => { leads.loading = v; }), setLeads: jest.fn((v) => { leads.leads = v; }) };
   const settings = { offHook: jest.fn().mockResolvedValue(undefined) };
   const subscription = { subscribe: jest.fn((event, cb) => { listeners[event] = cb; }) };
-  const adapter = { onLoadLeads: jest.fn().mockResolvedValue(undefined), onCallLead: jest.fn().mockResolvedValue(undefined) };
+  const messages: unknown[] = [];
+  const actualAdapter = Object.assign(Object.create(Adapter.prototype), {
+    messageTypes: adapterMessageTypes,
+    portManager: { isActiveTab: true },
+    transport: { events: { push: 'MessageTransport-push' }, _postMessage: (msg: unknown) => messages.push(msg) },
+  });
+  const adapter = {
+    onLoadLeads: jest.fn(actualAdapter.onLoadLeads.bind(actualAdapter)),
+    onCallLead: jest.fn(actualAdapter.onCallLead.bind(actualAdapter)),
+  };
   const port = { shared, onServer: jest.fn() };
   const dialer = new EvProgressiveDialer(client as any, auth as any, session as any, presence as any, working as any, call as any, leads as any, settings as any, subscription as any, adapter as any, port as any);
-  return { dialer, client, auth, session, presence, working, call, leads, settings, adapter, listeners, port };
+  return { dialer, client, auth, session, presence, working, call, leads, settings, adapter, listeners, port, messages, actualAdapter };
 }
 
 const advance = async (ms = 1000) => { await jest.advanceTimersByTimeAsync(ms); };
@@ -48,9 +61,50 @@ describe('progressive dialing', () => {
     expect(d.call.dialProgressiveLead).not.toHaveBeenCalled();
     await advance(251);
     expect(d.call.dialProgressiveLead).toHaveBeenCalledWith('request-1');
+    expect(d.adapter.onCallLead).not.toHaveBeenCalled();
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND', dnisE164: '+15555550100' });
     expect(d.adapter.onCallLead).toHaveBeenCalledWith(lead(), '+15555550100');
     await advance(5000);
     expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
+  });
+
+  it('emits the existing parent envelopes with the SDK-selected destination exactly once', async () => {
+    const d = setup();
+    const multipleNumbers = { ...lead(), destination: '+15555550100|+15555550101', destinationE164: '+15555550100|+15555550101' };
+    d.client.getPreviewDial.mockResolvedValue({ leads: [multipleNumbers] });
+    await d.dialer.start();
+    await advance(3250);
+    const call = { uii: 'call-1', callType: 'OUTBOUND', dnisE164: '+15555550101', dnis: '5555550101' };
+    d.listeners[EvCallbackTypes.NEW_CALL](call);
+    d.listeners[EvCallbackTypes.NEW_CALL](call);
+    expect(d.messages).toEqual([
+      { type: 'MessageTransport-push', payload: { type: 'rc-ev-loadLeads', leads: [multipleNumbers] } },
+      { type: 'MessageTransport-push', payload: { type: 'rc-ev-callLead', lead: multipleNumbers, destination: '+15555550101' } },
+    ]);
+    await d.actualAdapter.onNewCall(call);
+    await d.actualAdapter.onEndCall(call);
+    expect(d.messages.slice(2)).toEqual([
+      { type: 'MessageTransport-push', payload: { type: 'rc-ev-newCall', call } },
+      { type: 'MessageTransport-push', payload: { type: 'rc-ev-endCall', call } },
+    ]);
+  });
+
+  it('does not emit a progressive lead notification for an inbound interruption', async () => {
+    const d = setup();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'inbound', callType: 'INBOUND', ani: '+15555550199' });
+    expect(d.adapter.onCallLead).not.toHaveBeenCalled();
+    expect(d.dialer.running).toBe(false);
+  });
+
+  it('only emits parent messages from the active iframe client', async () => {
+    const d = setup();
+    d.actualAdapter.portManager.isActiveTab = false;
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND', dnis: '5555550100' });
+    expect(d.messages).toEqual([]);
   });
 
   it('cancels the countdown when stopped', async () => {
