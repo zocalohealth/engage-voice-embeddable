@@ -9,6 +9,7 @@ import { useLocale } from '@ringcentral-integration/micro-core/src/app/hooks';
 import { List, EmptyState, Button } from '@ringcentral/spring-ui';
 import { OutgoingCallMd, MissedCallMd } from '@ringcentral/spring-icon';
 
+import { EvProgressiveDialer } from '../../services/EvProgressiveDialer';
 import { EvLeads, ALLOW_DIAL_STATES, DISABLE_MANUAL_PASS_STATES, PHONE_DELIMETER } from '../../services/EvLeads';
 import type { Lead, DispositionItem } from '../../services/EvLeads';
 import { EvCall } from '../../services/EvCall';
@@ -45,6 +46,7 @@ export interface LeadsViewOptions {
 class LeadsView extends RcViewModule {
   constructor(
     private evLeads: EvLeads,
+    private progressiveDialer: EvProgressiveDialer,
     private evCall: EvCall,
     private evWorkingState: EvWorkingState,
     private evAgentSession: EvAgentSession,
@@ -89,6 +91,11 @@ class LeadsView extends RcViewModule {
     const { t } = useLocale(i18n);
 
     const {
+      progressiveEnabled,
+      progressiveRunning,
+      progressiveStatus,
+      progressiveSeconds,
+      canStartProgressive,
       filteredLeads,
       loading,
       noLeadsReturned,
@@ -99,6 +106,11 @@ class LeadsView extends RcViewModule {
       defaultTimezone,
       showViewLead,
     } = useConnector(() => ({
+      progressiveEnabled: this.progressiveDialer.enabled,
+      progressiveRunning: this.progressiveDialer.running,
+      progressiveStatus: this.progressiveDialer.phase,
+      progressiveSeconds: this.progressiveDialer.secondsUntilNextCall,
+      canStartProgressive: this.progressiveDialer.canStart,
       filteredLeads: this.evLeads.filteredLeads,
       loading: this.evLeads.loading,
       noLeadsReturned: this.evLeads.noLeadsReturned,
@@ -120,7 +132,7 @@ class LeadsView extends RcViewModule {
               <EmptyState
                 icon={noLeadsReturned ? MissedCallMd : OutgoingCallMd}
                 title={noLeadsReturned ? t('noLeadsReturned') : t('startOutboundDialing')}
-                description={loading ? t('gettingLeads') : t('getLeadsToStart')}
+                description={progressiveEnabled ? t('progressiveInstructions') : loading ? t('gettingLeads') : t('getLeadsToStart')}
               />
             </div>
           ) : (
@@ -149,7 +161,7 @@ class LeadsView extends RcViewModule {
                     phoneNumbers={phoneNumbers}
                     allowDial={allowDial}
                     isDialing={isDialing}
-                    disabled={pendingDisposition || agentBusy}
+                    disabled={pendingDisposition || agentBusy || progressiveRunning}
                     onDial={(dest) => this.dialLead(lead, dest)}
                     onPass={this.manualPassLead}
                     showManualPassButton={allowManualPass}
@@ -165,15 +177,34 @@ class LeadsView extends RcViewModule {
           )}
         </div>
 
-        <div className="flex justify-center items-center p-4 border-t border-neutral-b4">
-          <Button
+        <div className="flex flex-col gap-2 justify-center items-center p-4 border-t border-neutral-b4">
+          {progressiveEnabled ? (
+            <>
+              <div role="status" aria-live="polite" className="text-sm text-center">
+                {progressiveStatus === 'countdown' ? t('progressiveCountdown', { seconds: progressiveSeconds }) :
+                  progressiveStatus === 'empty' ? t('progressiveEmpty', { seconds: progressiveSeconds }) :
+                  progressiveStatus === 'error' ? t('progressiveError') :
+                  progressiveStatus === 'connecting' ? t('progressiveConnecting') :
+                  progressiveStatus === 'fetching' ? t('gettingLeads') :
+                  progressiveRunning ? t('progressiveWaiting') : t('progressiveInstructions')}
+              </div>
+              <Button
+                onClick={() => progressiveRunning ? this.progressiveDialer.stop() : this.progressiveDialer.start()}
+                variant="outlined"
+                color="primary"
+                disabled={!progressiveRunning && !canStartProgressive}
+              >
+                {progressiveRunning ? t('stopProgressive') : t('startProgressive')}
+              </Button>
+            </>
+          ) : <Button
             onClick={this.fetchLeads}
             variant="outlined"
             color="primary"
             loading={loading}
           >
             {t('getLeads')}
-          </Button>
+          </Button>}
         </div>
       </div>
     );

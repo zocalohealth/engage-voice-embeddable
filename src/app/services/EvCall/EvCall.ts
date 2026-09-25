@@ -16,7 +16,7 @@ import { Toast } from '@ringcentral-integration/micro-core/src/app/services';
 import { dialoutStatuses, messageTypes } from '../../../enums';
 import { t } from './i18n';
 import { callErrors } from '../../../enums/callErrors';
-import { EvCallbackTypes } from '../EvClient/enums';
+import { EvCallbackTypes, evStatus } from '../EvClient/enums';
 import type { EvOffhookInitResponse, EvBaseCall } from '../EvClient/interfaces';
 import { EvClient } from '../EvClient';
 import { EvAuth } from '../EvAuth';
@@ -53,6 +53,46 @@ const DEFAULT_OUTBOUND_SETTING: DialoutFormGroup = {
   name: 'EvCall',
 })
 class EvCall extends RcModule {
+  private manualDialListeners: Array<() => void | Promise<void>> = [];
+
+  beforeManualDial(listener: () => void | Promise<void>) {
+    this.manualDialListeners.push(listener);
+  }
+
+  get canProgressiveDial(): boolean {
+    return this.evClient.appStatus === evStatus.LOGINED &&
+      this.evAuth.agentPermissions?.allowOutbound === true &&
+      this.evAuth.isEvLogged && this.evAgentSession.configSuccess &&
+      !this.evAgentSession.configuring && this.evAuth.agentPermissions?.progressiveEnabled === true &&
+      this.evWorkingState.agentState?.agentState === 'AVAILABLE' &&
+      !this.evWorkingState.isPendingDisposition && this.evPresence.calls.length === 0 &&
+      this.isIdle && this.evSettings.isOffhook &&
+      (!this.evAgentSession.isIntegratedSoftphone || this.evIntegratedSoftphone.sipRegisterSuccess);
+  }
+
+  @delegate('server')
+  async prepareProgressiveDial(): Promise<boolean> {
+    if (!this.evAgentSession.isIntegratedSoftphone) return true;
+    if (!this.evIntegratedSoftphone.sipRegisterSuccess) return false;
+    const permitted = await this.evIntegratedSoftphone.askAudioPermission(false);
+    return permitted && this.evIntegratedSoftphone.sipRegisterSuccess;
+  }
+
+  @delegate('server')
+  async dialProgressiveLead(requestId: string): Promise<boolean> {
+    if (!this.canProgressiveDial) return false;
+    this.evPresence.setCurrentCallUii('');
+    this.setPhoneDialing();
+    const sent = await this.evClient.previewDialProgressive(
+      requestId, String(this.evAuth.agentConfig?.outboundSettings?.outdialGroup?.dialGroupId),
+    );
+    if (!sent) {
+      if (this.evPresence.calls.length === 0) this.setPhoneIdle();
+      return false;
+    }
+    return true;
+  }
+
   ringTimeLimit: RingTimeLimit = {
     min: 20,
     max: 120,
@@ -414,6 +454,7 @@ class EvCall extends RcModule {
     phoneNumber: string,
     options?: { skipParse?: boolean },
   ): Promise<void> {
+    await Promise.all(this.manualDialListeners.map((listener) => listener()));
     this.logger.info('dialout~~', phoneNumber);
     this.evPresence.setCurrentCallUii('');
     // Handle integrated softphone
@@ -464,6 +505,7 @@ class EvCall extends RcModule {
     leadPhone: string,
     leadPhoneE164: string,
   ): Promise<void> {
+    await Promise.all(this.manualDialListeners.map((listener) => listener()));
     this.logger.info('previewDial~~', requestId, leadPhone, leadPhoneE164);
     this.evPresence.setCurrentCallUii('');
     // Handle integrated softphone

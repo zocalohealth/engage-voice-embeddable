@@ -4,7 +4,7 @@
   "description": "RingCentral RingCX Embeddable widget",
   "browserslist": "> 0.25%, ie > 10",
   "scripts": {
-    "test": "jest --maxWorkers=1",
+    "test": "npm run test:unit -- --runInBand && jest --maxWorkers=1",
     "start": "npm run gulp -- devServer --build-env local",
     "build": "npm run gulp -- build --build-env prod",
     "gulp": "gulp --gulpfile gulpfile.ts --require @ringcentral-integration/babel-settings/lib/register.js",

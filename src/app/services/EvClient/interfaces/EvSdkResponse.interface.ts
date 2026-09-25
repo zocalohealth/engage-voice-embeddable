@@ -390,12 +390,22 @@ export interface EvAvailableScript {
   scriptName: string;
 }
 
+export interface EvOutboundDialGroup {
+  dialGroupId: string;
+  dialGroupName: string;
+  dialGroupDesc?: string;
+  dialMode: string;
+  progressiveEnabled?: boolean;
+  progressiveCallDelay?: string | number;
+  hciEnabled?: boolean;
+}
+
 export interface EvOutboundSettings {
   availableCampaigns: any[];
-  availableOutdialGroups: any[];
+  availableOutdialGroups: EvOutboundDialGroup[];
   insertCampaigns: any[];
   defaultDialGroup: string;
-  outdialGroup: EvAllowLeadUpdatesByCampaign;
+  outdialGroup: Partial<EvOutboundDialGroup>;
   previewDialLeads: any[];
   tcpaSafeLeads: any[];
   campaignDispositions: any[];
