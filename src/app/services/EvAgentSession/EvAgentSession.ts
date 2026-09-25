@@ -564,6 +564,7 @@ class EvAgentSession extends RcModule {
     needAssignFormGroupValue = false,
   }: ConfigureAgentParams = {}): Promise<void> {
     this._setConfiguring(true);
+    this._setConfigSuccess(false);
     try {
       let config = inputConfig ?? this._checkFieldsResult(this.formGroup);
       this.logger.info('configureAgent~~', triggerEvent, config);
@@ -584,7 +585,12 @@ class EvAgentSession extends RcModule {
         }
         result = (await this._connectEvServer(config)).result;
       }
-      await this._handleAgentResult({ config: result.data, needAssignFormGroupValue });
+      await this._handleAgentResult({ config: result.data });
+      // Login changes group permissions in the SDK; the shared app holds a separate snapshot.
+      const agentConfig = await this.evClient.getAgentConfig();
+      if (!agentConfig) throw new Error('Agent configuration refresh timed out');
+      await this.evAuth.setAgent({ ...this.evAuth.agent, agentConfig });
+      if (needAssignFormGroupValue) await this.assignFormGroupValue();
       this.auth.setNotFreshLogin();
       if (triggerEvent) {
         this._emitTriggerConfig();
