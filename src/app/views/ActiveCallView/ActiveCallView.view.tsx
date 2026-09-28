@@ -376,6 +376,8 @@ class ActiveCallView extends RcViewModule {
   async hangUp() {
     if (this.currentCall?.session?.sessionId) {
       await this.evActiveCallControl.hangUp(this.currentCall.session.sessionId);
+    } else {
+      this.toast.danger({ message: 'This call is no longer active. Reopen the current call before trying Hang up again.', ttl: 0 });
     }
   }
 
