@@ -1,0 +1,55 @@
+name: Deploy progressive dialer to Pages
+
+on:
+  push:
+    branches: [codex/progressive-dialing]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/codex/progressive-dialing'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HOSTING_URL: https://zocalohealth.github.io/engage-voice-embeddable
+      RINGCENTRAL_CLIENT_ID: AOTxVRud21rfkxO6wYxFcR
+      RINGCENTRAL_SERVER: https://platform.ringcentral.com
+      ENGAGE_VOICE_AUTH_SERVER: https://engage.ringcentral.com
+      BUILD_HASH: ${{ github.sha }}
+      NODE_OPTIONS: --max-old-space-size=6144
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:unit -- --runInBand
+      - run: npm run build
+      - name: Record deployed revision
+        run: |
+          node -e 'require("fs").writeFileSync("build/rc/build-info.json", JSON.stringify({commit: process.env.GITHUB_SHA, branch: process.env.GITHUB_REF_NAME}))'
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: build/rc
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
