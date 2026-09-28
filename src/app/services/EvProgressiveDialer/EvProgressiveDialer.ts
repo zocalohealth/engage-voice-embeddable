@@ -141,6 +141,9 @@ export class EvProgressiveDialer extends RcModule {
         if (this.generation === generation) await this.stop();
         return;
       }
+      // A reused phone connection must survive END_CALL, just like one opened below.
+      if (this.evPresence.isOffhook) await this.evPresence.setIsManualOffhook(true);
+      if (!this.isCurrent(generation)) return;
       this.timer = setInterval(() => { void this.tick(); }, 250);
       if (!this.evPresence.isOffhook && !this.evPresence.isOffhooking) {
         await this.evSettings.offHook();

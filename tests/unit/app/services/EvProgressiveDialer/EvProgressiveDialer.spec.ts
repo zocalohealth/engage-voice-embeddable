@@ -26,7 +26,7 @@ function setup(shared = false) {
   const client = { appStatus: evStatus.CONNECTED, getPreviewDial: jest.fn().mockResolvedValue({ leads: [lead()] }) };
   const auth = { isEvLogged: true, beforeAgentLogout: jest.fn(), agentPermissions: { allowOutbound: true, progressiveEnabled: true }, agentConfig: { outboundSettings: { outdialGroup: { dialGroupId: 'group-1', dialMode: 'PREVIEW', progressiveCallDelay: '3' } } } };
   const session = { configSuccess: true, configuring: false, onTriggerConfig: jest.fn() };
-  const presence = { isOffhook: true, isOffhooking: false, calls: [] as unknown[] };
+  const presence = { isManualOffhook: false, setIsManualOffhook: jest.fn(async (value) => { presence.isManualOffhook = value; }), isOffhook: true, isOffhooking: false, calls: [] as unknown[] };
   const working = { isPendingDisposition: false, agentState: { agentState: 'AVAILABLE' } };
   const call = { isIdle: true, canProgressiveDial: true, prepareProgressiveDial: jest.fn().mockResolvedValue(true), dialProgressiveLead: jest.fn().mockResolvedValue(true), beforeManualDial: jest.fn(), setPhoneIdle: jest.fn() };
   const leads = { leads: [] as Lead[], loading: false, leadStatesMapping: {} as Record<string, string>, setLoading: jest.fn((v) => { leads.loading = v; }), setLeads: jest.fn((v) => { leads.leads = v; }) };
@@ -59,6 +59,18 @@ describe('progressive dialing', () => {
   });
   beforeEach(() => jest.useFakeTimers());
   afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
+
+  it('keeps an already connected phone open between progressive calls', async () => {
+    const d = setup();
+    await d.dialer.start();
+    expect(d.presence.isManualOffhook).toBe(true);
+    expect(d.settings.offHook).not.toHaveBeenCalled();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    d.listeners[EvCallbackTypes.END_CALL]({ uii: 'call-1' });
+    expect(d.dialer.running).toBe(true);
+    expect(d.presence.isManualOffhook).toBe(true);
+  });
 
   it('fetches a pending lead and dials once after the configured preview delay', async () => {
     const d = setup();
