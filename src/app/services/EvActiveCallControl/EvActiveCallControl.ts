@@ -10,10 +10,8 @@ import {
   delegate,
 } from '@ringcentral-integration/next-core';
 
-import { Toast } from '@ringcentral-integration/micro-core/src/app/services';
-
 import { EvClient } from '../EvClient';
-import { EvCallbackTypes, evStatus } from '../EvClient/enums';
+import { EvCallbackTypes } from '../EvClient/enums';
 import type { EvHoldResponse } from '../EvClient/interfaces';
 import { EvPresence } from '../EvPresence';
 import { EvSubscription } from '../EvSubscription';
@@ -34,7 +32,6 @@ const MAIN_SESSION_ID = '1';
 
 /** How long to wait for the server to confirm a hold before giving up. */
 const HOLD_RESPONSE_TIMEOUT = 10 * 1000;
-const HANGUP_RESPONSE_TIMEOUT = 10 * 1000;
 
 /**
  * EvActiveCallControl module - Active call control operations
@@ -44,7 +41,6 @@ const HANGUP_RESPONSE_TIMEOUT = 10 * 1000;
   name: 'EvActiveCallControl',
 })
 class EvActiveCallControl extends RcModule {
-  private hangups = new Map<string, Promise<boolean>>();
   constructor(
     private evClient: EvClient,
     private evPresence: EvPresence,
@@ -52,7 +48,6 @@ class EvActiveCallControl extends RcModule {
     private evIntegratedSoftphone: EvIntegratedSoftphone,
     private evAgentSession: EvAgentSession,
     private storagePlugin: StoragePlugin,
-    private toast: Toast,
     @optional('EvActiveCallControlOptions')
     private evActiveCallControlOptions?: EvActiveCallControlOptions,
   ) {
@@ -174,18 +169,12 @@ class EvActiveCallControl extends RcModule {
    */
   @delegate('server')
   async hangUp(sessionId: string): Promise<void> {
-    const uii = this.liveCalls.find((call) => call.session?.sessionId === sessionId)?.uii;
-    if (!await this.hangupSession({ sessionId })) return;
+    this.evClient.hangup({ sessionId });
     // Leaving the consult leg of a warm transfer that held the customer: take
     // them off hold instead of leaving the agent talking to a held call.
-    if (this.unholdOnHangup && this.liveCalls.some((call) => call.uii === uii)) {
+    if (this.unholdOnHangup) {
       this.setUnholdOnHangup(false);
-      try {
-        await this.evClient.hold(false);
-      } catch {
-        this.setUnholdOnHangup(true);
-        this.toast.danger({ message: 'The transfer leg ended, but the customer is still on hold. Press Unhold to reconnect.', ttl: 0 });
-      }
+      await this.unhold();
     }
   }
 
@@ -257,98 +246,11 @@ class EvActiveCallControl extends RcModule {
   }
 
   /**
-   * Resolve true only after the targeted live session disappears from presence.
-   * Failed or unconfirmed requests show a persistent error and resolve false.
+   * Hang up a session
    */
   @delegate('server')
-  async hangupSession({ sessionId }: EvClientHangUpParams): Promise<boolean> {
-    const call = this.liveCalls.find((item) => item.session?.sessionId === sessionId);
-    if (!call) {
-      this.toast.danger({ message: 'This call is no longer active. Reopen the current call before trying Hang up again.', ttl: 0 });
-      return false;
-    }
-    return this.confirmHangup(`${call.uii}:${sessionId}`,
-      () => this.evClient.hangup({ sessionId }),
-      () => !this.liveCalls.some((item) => item.uii === call.uii && item.session?.sessionId === sessionId));
-  }
-
-  @delegate('server')
-  async hangUpDialer(): Promise<void> {
-    const pending = this.hangups.get('pending');
-    if (pending) { await pending; return; }
-    const sessionId = this.evPresence.calls[0]?.session?.sessionId;
-    if (sessionId) {
-      await this.hangUp(sessionId);
-      return;
-    }
-    const wasOffhook = this.evPresence.isOffhook;
-    let offhookEnded = false;
-    const onOffhookTerm = () => { offhookEnded = true; };
-    this.evSubscription.subscribe(EvCallbackTypes.OFFHOOK_TERM, onOffhookTerm);
-    let ended = () => offhookEnded || (wasOffhook && !this.evPresence.isOffhook);
-    try {
-      await this.confirmHangup('pending', async (canSend) => {
-        try {
-          await this.evClient.manualOutdialCancel(this.evPresence.currentCallUii);
-        } catch {
-          // Preview requests can reject manual cancellation; closing offhook
-          // still cancels the pending attempt.
-          this.logger.warn('hangup', { event: 'manualCancelFailed' });
-        }
-        if (!canSend() || this.evClient.appStatus !== evStatus.CONNECTED) throw new Error('Disconnected');
-        const call = this.evPresence.calls[0];
-        if (call?.session?.sessionId) {
-          const id = call.session.sessionId;
-          ended = () => !this.liveCalls.some((item) => item.uii === call.uii && item.session?.sessionId === id);
-          await this.evClient.hangup({ sessionId: id });
-        } else {
-          await this.evClient.offhookTerm();
-        }
-      }, () => ended());
-    } finally {
-      this.evSubscription.off(EvCallbackTypes.OFFHOOK_TERM, onOffhookTerm);
-    }
-  }
-
-  private get liveCalls() {
-    return [...this.evPresence.calls, ...this.evPresence.otherCalls].filter(Boolean);
-  }
-
-  private confirmHangup(key: string, send: (canSend: () => boolean) => Promise<unknown>, ended: () => boolean): Promise<boolean> {
-    const existing = this.hangups.get(key);
-    if (existing) return existing;
-    let active = true;
-    let cleanup = () => {};
-    const operation = new Promise<void>((resolve, reject) => {
-      let sent = false;
-      const check = () => {
-        if (this.evClient.appStatus !== evStatus.CONNECTED) reject(new Error('Disconnected'));
-        else if (sent && ended()) resolve();
-      };
-      const interval = setInterval(check, 250);
-      const timeout = setTimeout(() => reject(new Error('Hangup not confirmed')), HANGUP_RESPONSE_TIMEOUT);
-      // Install cleanup before sending: the SDK can confirm synchronously.
-      cleanup = () => { active = false; clearInterval(interval); clearTimeout(timeout); };
-      Promise.resolve().then(async () => {
-        if (this.evClient.appStatus !== evStatus.CONNECTED) throw new Error('Disconnected');
-        await send(() => active);
-        sent = true;
-        check();
-      }).catch(reject);
-    });
-    const result = operation.then(() => {
-      this.logger.info('hangup', { event: 'confirmed' });
-      return true;
-    }).catch(() => {
-      this.logger.warn('hangup', { event: 'unconfirmed' });
-      this.toast.danger({ message: 'Hang up could not be confirmed. The call may still be active. Check your connection and press Hang up to retry.', ttl: 0 });
-      return false;
-    }).finally(() => {
-      cleanup();
-      this.hangups.delete(key);
-    });
-    this.hangups.set(key, result);
-    return result;
+  async hangupSession({ sessionId }: EvClientHangUpParams): Promise<void> {
+    await this.evClient.hangup({ sessionId });
   }
 
   /**

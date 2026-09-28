@@ -88,7 +88,7 @@ class ActiveCallListView extends RcViewModule {
 
   onHangup(call: EvCallData): void {
     this._evActiveCallControl.hangupSession({
-      sessionId: call.session?.sessionId || '',
+      sessionId: call.session!.sessionId,
     });
   }
 
