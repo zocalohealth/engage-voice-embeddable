@@ -1,5 +1,6 @@
 jest.mock('@ringcentral-integration/next-core', () => ({
   injectable: () => (target: any) => target,
+  computed: () => (_t: any, _k: string, descriptor: PropertyDescriptor) => descriptor,
   action: (_t: any, _k: string, descriptor: PropertyDescriptor) => descriptor,
   delegate: () => (_t: any, _k: string, descriptor: PropertyDescriptor) => descriptor,
   state: () => undefined,
@@ -12,6 +13,7 @@ jest.mock('@ringcentral-integration/next-core', () => ({
 
 import { Adapter } from 'src/app/services/Adapter';
 import { adapterMessageTypes } from 'src/enums';
+import { EvWorkingState } from 'src/app/services/EvWorkingState';
 import { EvProgressiveDialer } from 'src/app/services/EvProgressiveDialer';
 import { EvCallbackTypes, evStatus } from 'src/app/services/EvClient/enums';
 import type { Lead } from 'src/app/services/EvLeads';
@@ -23,11 +25,11 @@ const lead = (id = '1'): Lead => ({
 
 function setup(shared = false) {
   const listeners: Record<string, (data?: any) => void> = {};
-  const client = { appStatus: evStatus.CONNECTED, getPreviewDial: jest.fn().mockResolvedValue({ leads: [lead()] }) };
+  const client = { setAgentState: jest.fn().mockResolvedValue(undefined), appStatus: evStatus.CONNECTED, getPreviewDial: jest.fn().mockResolvedValue({ leads: [lead()] }) };
   const auth = { isEvLogged: true, beforeAgentLogout: jest.fn(), agentPermissions: { allowOutbound: true, progressiveEnabled: true }, agentConfig: { outboundSettings: { outdialGroup: { dialGroupId: 'group-1', dialMode: 'PREVIEW', progressiveCallDelay: '3' } } } };
   const session = { configSuccess: true, configuring: false, onTriggerConfig: jest.fn() };
   const presence = { isManualOffhook: false, setIsManualOffhook: jest.fn(async (value) => { presence.isManualOffhook = value; }), isOffhook: true, isOffhooking: false, calls: [] as unknown[] };
-  const working = { isPendingDisposition: false, agentState: { agentState: 'AVAILABLE' } };
+  const working = { beforeChangeWorkingState: jest.fn(), isPendingDisposition: false, agentState: { agentState: 'AVAILABLE' } };
   const call = { isIdle: true, canProgressiveDial: true, prepareProgressiveDial: jest.fn().mockResolvedValue(true), dialProgressiveLead: jest.fn().mockResolvedValue(true), beforeManualDial: jest.fn(), setPhoneIdle: jest.fn() };
   const leads = { leads: [] as Lead[], loading: false, leadStatesMapping: {} as Record<string, string>, setLoading: jest.fn((v) => { leads.loading = v; }), setLeads: jest.fn((v) => { leads.leads = v; }) };
   const settings = { offHook: jest.fn().mockResolvedValue(undefined) };
@@ -181,6 +183,125 @@ describe('progressive dialing', () => {
     await advance(5000);
     expect(d.dialer.running).toBe(false);
     expect(d.call.dialProgressiveLead).not.toHaveBeenCalled();
+  });
+
+
+  it.each([true, false])('resumes after post-call WORKING (state arrives first: %s)', async (stateFirst) => {
+    const d = setup();
+    d.client.getPreviewDial.mockResolvedValue({ leads: [lead(), lead('2')] });
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    d.presence.calls = [{}];
+    d.call.isIdle = false;
+    const working = () => {
+      d.working.agentState.agentState = 'WORKING';
+      d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'WORKING' });
+    };
+    if (stateFirst) working();
+    d.listeners[EvCallbackTypes.END_CALL]({ uii: 'call-1' });
+    if (!stateFirst) working();
+    d.working.isPendingDisposition = true;
+    await advance(1000);
+    expect(d.client.setAgentState).not.toHaveBeenCalled();
+    d.presence.calls = [];
+    d.call.isIdle = true;
+    await advance(1000);
+    expect(d.client.setAgentState).not.toHaveBeenCalled();
+    d.working.isPendingDisposition = false;
+    await advance(1000);
+    expect(d.dialer.running).toBe(true);
+    expect(d.client.setAgentState).toHaveBeenCalledTimes(1);
+    expect(d.client.setAgentState).toHaveBeenCalledWith('AVAILABLE', 'Available');
+    expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
+    d.working.agentState.agentState = 'AVAILABLE';
+    d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'AVAILABLE' });
+    await advance(3500);
+    expect(d.call.dialProgressiveLead).toHaveBeenLastCalledWith('request-2');
+  });
+
+
+  it('stops the loop before sending a user-selected status to the SDK', async () => {
+    const d = setup();
+    await d.dialer.start();
+    const working = Object.assign(Object.create(EvWorkingState.prototype), {
+      workingStateListeners: [],
+      agentState: { agentState: 'AVAILABLE' },
+      evPresence: { calls: [] },
+      evClient: { setAgentState: jest.fn(async () => {
+        expect(d.dialer.running).toBe(false);
+      }) },
+    });
+    working.beforeChangeWorkingState(d.working.beforeChangeWorkingState.mock.calls[0][0]);
+    await working.changeWorkingState({ agentState: 'WORKING', agentAuxState: 'Working' });
+    expect(working.evClient.setAgentState).toHaveBeenCalledWith('WORKING', 'Working');
+  });
+
+  it('honors an explicit status change after a progressive call', async () => {
+    const d = setup();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    d.listeners[EvCallbackTypes.END_CALL]({ uii: 'call-1' });
+    await d.working.beforeChangeWorkingState.mock.calls[0][0]();
+    d.working.agentState.agentState = 'WORKING';
+    d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'WORKING' });
+    await advance(5000);
+    expect(d.dialer.running).toBe(false);
+    expect(d.client.setAgentState).not.toHaveBeenCalled();
+  });
+
+  it('stops with an error if the server never acknowledges Available', async () => {
+    const d = setup();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    d.listeners[EvCallbackTypes.END_CALL]({ uii: 'call-1' });
+    d.working.agentState.agentState = 'WORKING';
+    d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'WORKING' });
+    await advance(11500);
+    expect(d.dialer.phase).toBe('error');
+    expect(d.client.setAgentState).toHaveBeenCalledTimes(1);
+    expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not resume after an unrelated inbound call interrupts the loop', async () => {
+    const d = setup();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    d.listeners[EvCallbackTypes.END_CALL]({ uii: 'call-1' });
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'inbound', callType: 'INBOUND' });
+    d.working.agentState.agentState = 'WORKING';
+    await advance(5000);
+    expect(d.dialer.running).toBe(false);
+    expect(d.client.setAgentState).not.toHaveBeenCalled();
+  });
+
+  it('reports no leads after a completed call and continues polling', async () => {
+    const d = setup();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    d.client.getPreviewDial.mockResolvedValue({ leads: [] });
+    d.listeners[EvCallbackTypes.END_CALL]({ uii: 'call-1' });
+    await advance(250);
+    expect(d.dialer.running).toBe(true);
+    expect(d.dialer.phase).toBe('empty');
+    expect(d.dialer.secondsUntilNextCall).toBe(5);
+    const fetched = d.client.getPreviewDial.mock.calls.length;
+    await advance(5000);
+    expect(d.client.getPreviewDial).toHaveBeenCalledTimes(fetched + 1);
+  });
+
+  it('immediately reports a five-second retry when no leads are returned', async () => {
+    const d = setup();
+    d.client.getPreviewDial.mockResolvedValue({ leads: [] });
+    await d.dialer.start();
+    await advance(0);
+    expect(d.dialer.running).toBe(true);
+    expect(d.dialer.phase).toBe('empty');
+    expect(d.dialer.secondsUntilNextCall).toBe(5);
   });
 
   it('polls an empty queue every five seconds without overlapping fetches', async () => {

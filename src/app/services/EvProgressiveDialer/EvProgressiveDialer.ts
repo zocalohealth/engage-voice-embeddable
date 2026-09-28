@@ -33,6 +33,8 @@ export class EvProgressiveDialer extends RcModule {
   private callUii = '';
   private sentAt = 0;
   private connected = false;
+  private completedAt = 0;
+  private resumeRequestedAt = 0;
   // Retain consumed requests across Start/Stop so stale lead lists cannot redial them.
   private attempted = new Set<string>();
 
@@ -57,6 +59,7 @@ export class EvProgressiveDialer extends RcModule {
       });
       this.evAgentSession.onTriggerConfig(() => this.stop());
       this.evCall.beforeManualDial(() => this.stop());
+      this.evWorkingState.beforeChangeWorkingState(() => this.stop());
       this.evSubscription.subscribe(EvCallbackTypes.NEW_CALL, (call) => {
         if (this.pendingRequest && !this.callUii) {
           if (call.callType === 'OUTBOUND' && !call.isMonitoring) {
@@ -70,21 +73,27 @@ export class EvProgressiveDialer extends RcModule {
             }
           }
           else void this.stop();
+        } else if (this.running && !this.pendingRequest) {
+          void this.stop();
         }
       });
       this.evSubscription.subscribe(EvCallbackTypes.END_CALL, (call) => {
-        if (this.callUii && call.uii === this.callUii) this.finishAttempt();
+        if (this.callUii && call.uii === this.callUii) {
+          this.finishAttempt();
+          this.completedAt = Date.now();
+        }
       });
       this.evSubscription.subscribe(EvCallbackTypes.PREVIEW_LEAD_STATE, (data) => {
         if (data.requestId === this.pendingRequest && TERMINAL_LEAD_STATES.has(data.leadState)) {
           if (!this.callUii && this.evPresence.calls.length === 0) {
             this.evCall.setPhoneIdle();
             this.finishAttempt();
+            this.completedAt = Date.now();
           }
         }
       });
       this.evSubscription.subscribe(EvCallbackTypes.AGENT_STATE, (data) => {
-        if (this.running && !['AVAILABLE', 'ENGAGED', 'TRANSITION', 'PREVIEWING'].includes(data.currentState)) {
+        if (this.running && !this.canContinueInState(data.currentState)) {
           void this.stop();
         }
       });
@@ -161,6 +170,8 @@ export class EvProgressiveDialer extends RcModule {
     this.timer = undefined;
     this.deadline = 0;
     this.finishAttempt();
+    this.completedAt = 0;
+    this.resumeRequestedAt = 0;
     this.setState(false, 'stopped');
     // Stopping prevents future dials; it never hangs up a call already sent.
     this.logger.info('progressiveDialer', { event: 'stopped' });
@@ -191,11 +202,16 @@ export class EvProgressiveDialer extends RcModule {
       (this.evLeads.leadStatesMapping[lead.requestId] || lead.leadState) === 'PENDING');
   }
 
+  private canContinueInState(agentState: string): boolean {
+    return ['AVAILABLE', 'ENGAGED', 'TRANSITION', 'PREVIEWING'].includes(agentState) ||
+      (agentState === 'WORKING' && Boolean(this.pendingRequest || this.completedAt));
+  }
+
   private async tick(): Promise<void> {
     const generation = this.generation;
     if (!this.isCurrent(generation)) { if (this.running) await this.stop(); return; }
     const agentState = this.evWorkingState.agentState?.agentState;
-    if (!['AVAILABLE', 'ENGAGED', 'TRANSITION', 'PREVIEWING'].includes(agentState)) {
+    if (!this.canContinueInState(agentState)) {
       await this.stop();
       return;
     }
@@ -207,6 +223,23 @@ export class EvProgressiveDialer extends RcModule {
     this.connected = true;
     if (this.pendingRequest) {
       if (!this.callUii && Date.now() - this.sentAt >= 30000) this.fail();
+      return;
+    }
+    if (agentState === 'WORKING' && this.completedAt &&
+        !this.evPresence.calls.length && !this.evWorkingState.isPendingDisposition && this.evCall.isIdle) {
+      this.setState(true, 'waiting');
+      // Allow call-end and disposition callbacks to settle before resuming our own call loop.
+      if (Date.now() - this.completedAt < 1000) return;
+      if (this.resumeRequestedAt) {
+        if (Date.now() - this.resumeRequestedAt >= 10000) this.fail();
+        return;
+      }
+      this.resumeRequestedAt = Date.now();
+      try {
+        await this.evClient.setAgentState('AVAILABLE', 'Available');
+      } catch {
+        if (this.isCurrent(generation)) this.fail();
+      }
       return;
     }
     if (agentState !== 'AVAILABLE' || this.evPresence.calls.length ||
@@ -233,6 +266,8 @@ export class EvProgressiveDialer extends RcModule {
     if (!this.evCall.canProgressiveDial) { await this.stop(); return; }
     const requestKey = `${this.groupId}:${lead.requestId}`;
     this.attempted.add(requestKey);
+    this.completedAt = 0;
+    this.resumeRequestedAt = 0;
     this.pendingRequest = lead.requestId;
     this.notificationLead = lead;
     this.sentAt = Date.now();
@@ -269,8 +304,9 @@ export class EvProgressiveDialer extends RcModule {
       this.evLeads.setLeads(response.leads);
       await this.adapter.onLoadLeads(response.leads);
       if (!this.isCurrent(generation)) return;
-      this.deadline = Date.now() + (this.nextLead() ? 0 : 5000);
-      this.setState(true, this.nextLead() ? 'waiting' : 'empty');
+      const hasNextLead = Boolean(this.nextLead());
+      this.deadline = Date.now() + (hasNextLead ? 0 : 5000);
+      this.setState(true, hasNextLead ? 'waiting' : 'empty', hasNextLead ? 0 : 5);
     } catch {
       if (this.isCurrent(generation)) this.fail();
     } finally {

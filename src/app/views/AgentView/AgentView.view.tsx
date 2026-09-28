@@ -23,6 +23,8 @@ import { LeadsView } from '../LeadsView';
 import { CallHistoryView } from '../CallHistoryView';
 import { WorkingStateSelectView } from '../WorkingStateSelectView';
 import { OffhookButtonView } from '../OffhookButtonView';
+import { EvProgressiveDialer } from '../../services/EvProgressiveDialer';
+import { ProgressiveLeadStatus } from './ProgressiveLeadStatus';
 import { EvAgentSession } from '../../services/EvAgentSession';
 
 import type {
@@ -54,6 +56,7 @@ class AgentView extends RcViewModule {
     protected _workingStateSelectView: WorkingStateSelectView,
     protected _offhookButtonView: OffhookButtonView,
     protected _evAgentSession: EvAgentSession,
+    protected _progressiveDialer: EvProgressiveDialer,
     @optional('AgentViewOptions')
     protected _agentViewOptions?: AgentViewOptions,
   ) {
@@ -109,11 +112,14 @@ class AgentView extends RcViewModule {
     const isMainClient = useIsMainClient();
     const [routeTabId, setRouteTabId] = useState<string | null>(null);
 
-    const { tabs } = useConnector(() => {
+    const { tabs, running, phase, secondsUntilNextCall } = useConnector(() => {
       const uiProps = this.getUIProps(props ?? {});
       return {
         ...props,
         ...uiProps,
+        running: this._progressiveDialer.running,
+        phase: this._progressiveDialer.phase,
+        secondsUntilNextCall: this._progressiveDialer.secondsUntilNextCall,
       };
     });
 
@@ -140,6 +146,7 @@ class AgentView extends RcViewModule {
           <this._workingStateSelectView.component />
           <this._offhookButtonView.component />
         </AppHeaderNav>
+        <ProgressiveLeadStatus running={running} phase={phase} secondsUntilNextCall={secondsUntilNextCall} />
         {
           tabs.length > 0 ? (
             <this._syncTabView.component

@@ -32,7 +32,10 @@ interface TransferPanelProps {
   isStayOnCall: boolean;
   isTransferring: boolean;
   isDisabled: boolean;
+  transferFailed: boolean;
   agentList: EvDirectAgentListItem[];
+  agentListUpdatedAt: number;
+  agentListFailed: boolean;
   phoneBook: EvTransferPhoneBookItem[];
   selectedAgentId: string | null;
   selectedPhoneBookIndex: number | null;
@@ -71,7 +74,10 @@ export const TransferPanel: FunctionComponent<TransferPanelProps> = ({
   isStayOnCall,
   isTransferring,
   isDisabled,
+  transferFailed,
   agentList,
+  agentListUpdatedAt,
+  agentListFailed,
   phoneBook,
   selectedAgentId,
   selectedPhoneBookIndex,
@@ -172,6 +178,8 @@ export const TransferPanel: FunctionComponent<TransferPanelProps> = ({
             <InternalTransferTab
               isActive={activeTab === transferTypes.internal}
               agentList={agentList}
+              updatedAt={agentListUpdatedAt}
+              failed={agentListFailed}
               selectedAgentId={selectedAgentId}
               onSelectAgent={onSelectAgent}
               fetchAgentList={fetchAgentList}
@@ -180,6 +188,10 @@ export const TransferPanel: FunctionComponent<TransferPanelProps> = ({
                 noAgents: t('noAgents'),
                 available: t('available'),
                 unavailable: t('unavailable'),
+                unknown: t('availabilityUnknown'),
+                refreshFailed: t('availabilityRefreshFailed'),
+                checking: t('checkingAvailability'),
+                checked: (seconds) => t('availabilityChecked', { seconds }),
               }}
             />
           </TabPanel>
@@ -247,13 +259,17 @@ export const TransferPanel: FunctionComponent<TransferPanelProps> = ({
         </div>
       </TabContext>
       <div className="flex-shrink-0 px-4 pb-4">
+        {transferFailed && <p role="alert" className="typography-subText mb-2">{t('transferFailed')}</p>}
+        {(activeTab === transferTypes.manualEntry || activeTab === transferTypes.phoneBook) && (
+          <p className="typography-subText mb-2">{t('externalAvailabilityUnknown')}</p>
+        )}
         <div className="flex items-center gap-2 mb-4">
           <Switch
             data-sign="stayOnCall"
             checked={isStayOnCall}
             onChange={onStayOnCallChange}
           />
-          <span className="typography-mainText">{t('stayOnCall')}</span>
+          <span className="typography-mainText">{t(activeTab === transferTypes.queue ? 'stayOnCall' : 'consultFirst')}</span>
         </div>
         <div className="flex gap-2">
           <Button
@@ -286,7 +302,7 @@ export const TransferPanel: FunctionComponent<TransferPanelProps> = ({
                 : undefined
             }
           >
-            {t('transfer')}
+            {t(activeTab === transferTypes.queue ? 'transfer' : isStayOnCall ? 'startConsult' : 'blindTransfer')}
           </Button>
         </div>
       </div>

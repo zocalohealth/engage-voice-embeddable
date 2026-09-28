@@ -714,8 +714,8 @@ export interface EvDirectAgentListItem {
 }
 
 export interface EvDirectAgentListResponse {
-  status: 'true' | 'false';
-  message: EvOkFail;
+  status: EvOkFail;
+  message: string;
   agents: EvDirectAgentListItem[];
 }
 

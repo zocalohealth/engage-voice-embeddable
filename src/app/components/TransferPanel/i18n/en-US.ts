@@ -1,4 +1,13 @@
 export default {
+  transferFailed: 'Transfer could not be started. Check recipient availability and call status, then try again.',
+  consultFirst: 'Consult before transferring',
+  startConsult: 'Start consult',
+  blindTransfer: 'Blind transfer',
+  availabilityUnknown: 'Availability unknown',
+  availabilityRefreshFailed: 'Could not refresh availability. Retrying…',
+  checkingAvailability: 'Checking agent availability…',
+  availabilityChecked: 'Availability checked {seconds}s ago',
+  externalAvailabilityUnknown: 'Availability is unknown for directory contacts and external numbers. Consult before transferring.',
   searchAgents: 'Search agents...',
   noAgents: 'No agents available',
   available: 'Available',

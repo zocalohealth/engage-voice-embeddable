@@ -122,6 +122,7 @@ class LeadsView extends RcViewModule {
       showViewLead: this.thirdParty.leadViewerEnabled,
     }));
 
+    const showNoLeads = noLeadsReturned || (progressiveRunning && progressiveStatus === 'empty');
     const agentBusy = AGENT_BUSY_STATES.includes(agentState);
 
     return (
@@ -130,9 +131,9 @@ class LeadsView extends RcViewModule {
           {filteredLeads.length === 0 ? (
             <div className="flex items-center justify-center h-full">
               <EmptyState
-                icon={noLeadsReturned ? MissedCallMd : OutgoingCallMd}
-                title={noLeadsReturned ? t('noLeadsReturned') : t('startOutboundDialing')}
-                description={progressiveEnabled ? t('progressiveInstructions') : loading ? t('gettingLeads') : t('getLeadsToStart')}
+                icon={showNoLeads ? MissedCallMd : OutgoingCallMd}
+                title={showNoLeads ? t('noLeadsReturned') : t('startOutboundDialing')}
+                description={progressiveRunning ? (progressiveStatus === 'empty' ? t('progressiveEmpty', { seconds: progressiveSeconds }) : progressiveStatus === 'fetching' ? t('gettingLeads') : t('progressiveWaiting')) : progressiveEnabled ? t('progressiveInstructions') : loading ? t('gettingLeads') : t('getLeadsToStart')}
               />
             </div>
           ) : (
