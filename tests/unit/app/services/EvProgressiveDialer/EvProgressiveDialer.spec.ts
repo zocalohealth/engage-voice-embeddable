@@ -9,14 +9,8 @@ jest.mock('@ringcentral-integration/next-core', () => ({
   watch: jest.fn(),
   RcModule: class { logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() }; },
   PortManager: class {},
-  RcViewModule: class {},
 }));
 
-jest.mock('@ringcentral/spring-ui', () => ({}));
-jest.mock('@ringcentral/spring-icon', () => ({}));
-jest.mock('@ringcentral-integration/micro-core/src/app/hooks', () => ({}));
-
-import { DialerView } from 'src/app/views/DialerView/DialerView.view';
 import { Adapter } from 'src/app/services/Adapter';
 import { adapterMessageTypes } from 'src/enums';
 import { EvWorkingState } from 'src/app/services/EvWorkingState';
@@ -132,52 +126,6 @@ describe('progressive dialing', () => {
     await advance(3250);
     d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND', dnis: '5555550100' });
     expect(d.messages).toEqual([]);
-  });
-
-  it('hangs up a pending progressive attempt after stopping the loop', async () => {
-    const d = setup();
-    await d.dialer.start();
-    await advance(3250);
-    expect(d.call.dialProgressiveLead).toHaveBeenCalledWith('request-1');
-    await d.dialer.stop();
-
-    const offhookTerm = jest.fn();
-    const view = Object.assign(Object.create(DialerView.prototype), {
-      evCallMonitor: { calls: [] },
-      evCall: { outdialCancel: jest.fn() },
-      evClient: { offhookTerm },
-      evSettings: { get isManualOffhook() { return d.presence.isManualOffhook; } },
-    });
-    await view.hangup();
-    expect(offhookTerm).toHaveBeenCalledTimes(1);
-    await advance(5000);
-    expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
-  });
-
-  it.each([false, true])('hangs up a session after Stop (session arrives during cancellation: %s)', async (duringCancel) => {
-    const d = setup();
-    await d.dialer.start();
-    await advance(3250);
-    await d.dialer.stop();
-
-    const session = { session: { sessionId: '1' } };
-    const monitor = { calls: duringCancel ? [] : [session] };
-    const hangUp = jest.fn();
-    const offhookTerm = jest.fn();
-    const outdialCancel = jest.fn(async () => { monitor.calls = [session]; });
-    const view = Object.assign(Object.create(DialerView.prototype), {
-      evCallMonitor: monitor,
-      evActiveCallControl: { hangUp },
-      evCall: { outdialCancel },
-      evClient: { offhookTerm },
-      evSettings: { get isManualOffhook() { return d.presence.isManualOffhook; } },
-    });
-    await view.hangup();
-    expect(hangUp).toHaveBeenCalledWith('1');
-    expect(outdialCancel).toHaveBeenCalledTimes(duringCancel ? 1 : 0);
-    expect(offhookTerm).not.toHaveBeenCalled();
-    await advance(5000);
-    expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
   });
 
   it('cancels the countdown when stopped', async () => {

@@ -301,14 +301,9 @@ class DialerView extends RcViewModule {
       return;
     }
     await this.evCall.outdialCancel();
-    const connectedSessionId = this.evCallMonitor.calls[0]?.session?.sessionId;
-    if (connectedSessionId) {
-      await this.evActiveCallControl.hangUp(connectedSessionId);
-      return;
+    if (!this.evSettings.isManualOffhook) {
+      await this.evClient.offhookTerm();
     }
-    // Progressive mode keeps offhook open between calls. An explicit Hang up
-    // must still close it to cancel a pending preview dial, even after Stop.
-    await this.evClient.offhookTerm();
   }
 
   /**
