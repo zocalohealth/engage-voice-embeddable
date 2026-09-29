@@ -52,6 +52,17 @@ const DEFAULT_AGENT_STATE: AgentState = {
   name: 'EvWorkingState',
 })
 class EvWorkingState extends RcModule {
+  private workingStateListeners: Array<() => void | Promise<void>> = [];
+
+  beforeChangeWorkingState(listener: () => void | Promise<void>) {
+    this.workingStateListeners.push(listener);
+  }
+
+  @delegate('server')
+  async beforeWorkingStateChange(): Promise<void> {
+    for (const listener of this.workingStateListeners) await listener();
+  }
+
   constructor(
     private evClient: EvClient,
     private evAuth: EvAuth,
@@ -269,7 +280,7 @@ class EvWorkingState extends RcModule {
   /**
    * Change agent working state
    */
-  changeWorkingState({ agentState, agentAuxState }: AgentState): void {
+  async changeWorkingState({ agentState, agentAuxState }: AgentState): Promise<void> {
     const isOnCall =
       this.agentState.agentState === agentStateTypes.transition ||
       this.agentState.agentState === agentStateTypes.engaged ||
@@ -282,7 +293,8 @@ class EvWorkingState extends RcModule {
       });
       return;
     }
-    this.evClient.setAgentState(agentState, agentAuxState);
+    await this.beforeWorkingStateChange();
+    await this.evClient.setAgentState(agentState, agentAuxState);
   }
 
   /**

@@ -70,6 +70,14 @@ class TransferView extends RcViewModule {
   @state
   private _manualEntryNumber = '';
 
+  @state
+  transferFailed = false;
+
+  @action
+  private _setTransferFailed(failed: boolean) {
+    this.transferFailed = failed;
+  }
+
   /**
    * Only the id is kept, not the record: a selection is meaningful just while
    * the record is still in the result list, so looking it up on read means a
@@ -362,6 +370,9 @@ class TransferView extends RcViewModule {
   @computed((that: TransferView) => [
     that._evTransferCall.transferType,
     that._evTransferCall.transferAgentId,
+    that._evTransferCall.transferAgentList,
+    that._evTransferCall.agentListFailed,
+    that._evTransferCall.agentListUpdatedAt,
     that._evTransferCall.transferPhoneBookSelectedIndex,
     that._manualEntryNumber,
     that._selectedDirectoryRecordId,
@@ -377,7 +388,10 @@ class TransferView extends RcViewModule {
     if (!this._canTransferNow) return true;
     switch (transferType) {
       case transferTypes.internal:
-        return !this._evTransferCall.transferAgentId;
+        return this._evTransferCall.agentListFailed ||
+          !this._evTransferCall.agentListUpdatedAt ||
+          !this._evTransferCall.transferAgentList.some((agent) =>
+            agent.agentId === this._evTransferCall.transferAgentId && agent.available === true);
       case transferTypes.phoneBook:
         return this._evTransferCall.transferPhoneBookSelectedIndex === null;
       case transferTypes.manualEntry:
@@ -395,6 +409,8 @@ class TransferView extends RcViewModule {
 
   @delegate('server')
   async executeTransfer(): Promise<void> {
+    if (!this._canTransferNow) return;
+    this._setTransferFailed(false);
     try {
       if (this.isQueueTransfer) {
         await this._evRequeueCall.requeueCall();
@@ -417,7 +433,8 @@ class TransferView extends RcViewModule {
       this._resetManualEntry();
       this._returnToActiveCall();
     } catch (error) {
-      this.logger.error('Transfer failed:', error);
+      this._setTransferFailed(true);
+      this.logger.warn('Transfer failed');
     }
   }
 
@@ -464,6 +481,7 @@ class TransferView extends RcViewModule {
    */
   @delegate('server')
   async handleTabChange(type: EvTransferType): Promise<void> {
+    this._setTransferFailed(false);
     this._setSelectedDirectoryRecordId(null);
     this._evDirectorySearch.clear(this._searchScope);
     this._evTransferCall.changeTransferType(type);
@@ -520,9 +538,12 @@ class TransferView extends RcViewModule {
       isTransferring:
         this._evTransferCall.transferring || this._evRequeueCall.requeuing,
       isDisabled: this.isTransferDisabled,
+      transferFailed: this.transferFailed,
       allTabs: this.allTabs,
       defaultTab: this.defaultTab,
       agentList: this._evTransferCall.transferAgentList,
+      agentListUpdatedAt: this._evTransferCall.agentListUpdatedAt,
+      agentListFailed: this._evTransferCall.agentListFailed,
       phoneBook: this._evTransferCall.transferPhoneBook,
       selectedAgentId: this._evTransferCall.transferAgentId,
       selectedPhoneBookIndex:
@@ -578,7 +599,10 @@ class TransferView extends RcViewModule {
           isStayOnCall={uiProps.isStayOnCall}
           isTransferring={uiProps.isTransferring}
           isDisabled={uiProps.isDisabled}
+          transferFailed={uiProps.transferFailed}
           agentList={uiProps.agentList}
+          agentListUpdatedAt={uiProps.agentListUpdatedAt}
+          agentListFailed={uiProps.agentListFailed}
           phoneBook={uiProps.phoneBook}
           selectedAgentId={uiProps.selectedAgentId}
           selectedPhoneBookIndex={uiProps.selectedPhoneBookIndex}

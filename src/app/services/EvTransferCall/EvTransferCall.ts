@@ -66,6 +66,20 @@ const NON_PHONE_DEST_COUNTRY_ID = 'USA';
 class EvTransferCall extends RcModule {
   private _eventEmitter = new EventEmitter();
   private _transferDest: string | null = null;
+  private _agentListRequest: Promise<boolean> | null = null;
+  private _agentListGeneration = 0;
+
+  @state
+  agentListUpdatedAt = 0;
+
+  @state
+  agentListFailed = false;
+
+  @action
+  private _setAgentListHealth(updatedAt: number, failed: boolean) {
+    this.agentListUpdatedAt = updatedAt;
+    this.agentListFailed = failed;
+  }
 
   constructor(
     private evClient: EvClient,
@@ -214,6 +228,10 @@ class EvTransferCall extends RcModule {
     this.transferType = transferTypes.phoneBook;
     this.transferAgentId = null;
     this.transferAgentList = [];
+    this._agentListGeneration += 1;
+    this._agentListRequest = null;
+    this.agentListUpdatedAt = 0;
+    this.agentListFailed = false;
     this.transferPhoneBookSelectedIndex = null;
     this.transferRecipientNumber = '';
     this.transferRecipientSkipParse = false;
@@ -383,19 +401,39 @@ class EvTransferCall extends RcModule {
     await this.evActiveCallControl.holdAndConfirm();
   }
 
-  async fetchAgentList(): Promise<void> {
-    let data;
+  async fetchAgentList(): Promise<boolean> {
+    if (this._agentListRequest) return this._agentListRequest;
+    const generation = this._agentListGeneration;
+    const request = this._refreshAgentList(generation);
+    this._agentListRequest = request;
     try {
-      const result = await this.evClient.fetchDirectAgentList();
-      if (result) {
-        data = result.agents;
-      }
-    } catch (e) {
-      console.error(e);
+      return await request;
     } finally {
-      if (Array.isArray(data)) {
-        this.changeAgentList(data);
+      if (this._agentListRequest === request) this._agentListRequest = null;
+    }
+  }
+
+  private async _refreshAgentList(generation: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const result = await Promise.race([
+        this.evClient.fetchDirectAgentList(),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Agent list timeout')), 8000);
+        }),
+      ]);
+      if (generation !== this._agentListGeneration) return false;
+      if (result?.status !== 'OK' || !Array.isArray(result.agents)) throw new Error('Invalid agent list');
+      this.changeAgentList(result.agents);
+      this._setAgentListHealth(Date.now(), false);
+      return true;
+    } catch {
+      if (generation === this._agentListGeneration) {
+        this._setAgentListHealth(this.agentListUpdatedAt, true);
       }
+      return false;
+    } finally {
+      if (timer) clearTimeout(timer);
     }
   }
 
@@ -450,17 +488,17 @@ class EvTransferCall extends RcModule {
         data: `Abnormal Transfer: this.transferAgentId -> ${this.transferAgentId}`,
       });
     }
-    try {
-      await this.fetchAgentList();
-    } catch (e) {
-      console.warn('fetch agent list error');
-      console.error(e);
+    const agentId = this.transferAgentId;
+    const refreshed = await this.fetchAgentList();
+    const agent = this.transferAgentList.find((item) => item.agentId === agentId);
+    if (!refreshed || this.transferAgentId !== agentId || agent?.available !== true) {
+      throw new Error('The selected agent is unavailable or availability could not be verified. Refresh and select an available agent.');
     }
     if (this.stayOnCall) {
       await this._holdBeforeWarmTransfer();
-      await this.evClient.warmDirectAgentTransfer(this.transferAgentId);
+      await this.evClient.warmDirectAgentTransfer(agentId);
     } else {
-      await this.evClient.coldDirectAgentTransfer(this.transferAgentId);
+      await this.evClient.coldDirectAgentTransfer(agentId);
     }
   }
 

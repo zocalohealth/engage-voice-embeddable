@@ -1416,6 +1416,23 @@ class EvClient extends RcModule {
     await this._sdk.previewDial(requestId, leadPhone, leadPhoneE164);
   }
 
+  /** Recheck SDK state after crossing from the shared worker to the phone tab. */
+  @delegate('mainClient')
+  async previewDialProgressive(requestId: string, dialGroupId: string): Promise<boolean> {
+    const model = this._uiModel;
+    const agent = model?.agentSettings;
+    const pending = model?.connectionSettings?.isPendingDisp;
+    if (this._sdk?.socket?.readyState !== 1 || !agent?.isLoggedIn ||
+        agent.currentState !== 'AVAILABLE' || !agent.isOffhook || agent.onCall ||
+        pending === true || pending === 'true' ||
+        model?.agentPermissions?.progressiveEnabled !== true ||
+        String(model?.outboundSettings?.outdialGroup?.dialGroupId) !== dialGroupId) {
+      return false;
+    }
+    this._sdk.previewDial(requestId, '', '');
+    return true;
+  }
+
   /**
    * Manual pass disposition
    */

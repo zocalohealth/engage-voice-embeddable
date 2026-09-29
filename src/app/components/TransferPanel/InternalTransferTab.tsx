@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, type FunctionComponent } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type FunctionComponent } from 'react';
 import { Autocomplete, Chip, ListItemText, StatusIndicator } from '@ringcentral/spring-ui';
 import type { AutocompleteRef, SuggestionListItemData } from '@ringcentral/spring-ui';
 
@@ -15,6 +15,8 @@ interface AgentOption extends SuggestionListItemData {
 interface InternalTransferTabProps {
   isActive: boolean;
   agentList: EvDirectAgentListItem[];
+  updatedAt: number;
+  failed: boolean;
   selectedAgentId: string | null;
   onSelectAgent: (agentId: string) => void;
   fetchAgentList: () => void;
@@ -23,6 +25,10 @@ interface InternalTransferTabProps {
     noAgents: string;
     available: string;
     unavailable: string;
+    unknown: string;
+    refreshFailed: string;
+    checking: string;
+    checked: (seconds: number) => string;
   };
 }
 
@@ -32,18 +38,26 @@ interface InternalTransferTabProps {
 export const InternalTransferTab: FunctionComponent<InternalTransferTabProps> = ({
   isActive,
   agentList,
+  updatedAt,
+  failed,
   selectedAgentId,
   onSelectAgent,
   fetchAgentList,
   labels,
 }) => {
   const actionRef = useRef<AutocompleteRef>(null);
+  const [now, setNow] = useState(Date.now());
+  const fresh = !failed && updatedAt > 0 && now - updatedAt < 10000;
+  const statusLabel = (available: boolean) => fresh ? (available ? labels.available : labels.unavailable) : labels.unknown;
 
   useEffect(() => {
+    if (!isActive) return;
+    setNow(Date.now());
+    const clock = setInterval(() => setNow(Date.now()), 1000);
     fetchAgentList();
     const timerId = setInterval(fetchAgentList, AGENT_LIST_POLL_INTERVAL);
-    return () => clearInterval(timerId);
-  }, [fetchAgentList]);
+    return () => { clearInterval(timerId); clearInterval(clock); };
+  }, [fetchAgentList, isActive]);
 
   useEffect(() => {
     if (isActive) {
@@ -53,15 +67,16 @@ export const InternalTransferTab: FunctionComponent<InternalTransferTabProps> = 
 
   const options: AgentOption[] = useMemo(
     () =>
-      agentList.map((agent) => ({
+      [...agentList].sort((a, b) => Number(b.available === true) - Number(a.available === true)).map((agent) => ({
         id: agent.agentId,
         label: (agent.firstName || agent.lastName)
           ? `${agent.firstName} ${agent.lastName}`.trim()
           : agent.username,
         agentId: agent.agentId,
-        available: agent.available,
+        available: agent.available === true,
+        disabled: !fresh || agent.available !== true,
       })),
-    [agentList],
+    [agentList, fresh],
   );
 
   const selectedValue = useMemo(() => {
@@ -82,6 +97,10 @@ export const InternalTransferTab: FunctionComponent<InternalTransferTabProps> = 
 
   return (
     <div className="flex-1 overflow-hidden" data-sign="internalTransferTab">
+      <p role="status" className="typography-subText mb-2">
+        {failed ? labels.refreshFailed : !updatedAt ? labels.checking : fresh ? labels.checked(Math.max(0, Math.floor((now - updatedAt) / 1000))) : labels.unknown}
+      </p>
+      {fresh && agentList.length === 0 && <p>{labels.noAgents}</p>}
       <Autocomplete
         action={actionRef}
         data-sign="agentAutocomplete"
@@ -103,14 +122,14 @@ export const InternalTransferTab: FunctionComponent<InternalTransferTabProps> = 
             return (
               <Chip
                 key={id}
-                label={label}
                 aria-label={`${label}, press Backspace to remove`}
                 {...rest}
                 {...itemChipProps}
+                label={`${label} · ${statusLabel(agent.available)}`}
                 size="small"
                 startSlot={
                   <StatusIndicator
-                    variant={agent.available ? 'available' : 'unavailable'}
+                    variant={fresh && agent.available ? 'available' : 'unavailable'}
                     size="medium"
                   />
                 }
@@ -128,17 +147,18 @@ export const InternalTransferTab: FunctionComponent<InternalTransferTabProps> = 
           return (
             <div
               id={`${id}`}
+              aria-disabled={disabled || undefined}
               className={itemClassName}
               {...(restProps as React.HTMLAttributes<HTMLDivElement>)}
               key={`${id || label}-${state.index}`}
             >
               <StatusIndicator
-                variant={available ? 'available' : 'unavailable'}
+                variant={fresh && available ? 'available' : 'unavailable'}
                 size="medium"
               />
               <ListItemText
                 primary={label}
-                secondary={available ? labels.available : labels.unavailable}
+                secondary={statusLabel(available)}
               />
             </div>
           );

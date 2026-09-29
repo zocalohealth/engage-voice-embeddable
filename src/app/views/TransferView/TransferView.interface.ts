@@ -35,9 +35,12 @@ interface TransferViewUIProps {
   isStayOnCall: boolean;
   isTransferring: boolean;
   isDisabled: boolean;
+  transferFailed: boolean;
   allTabs: TransferTab[];
   defaultTab: EvTransferType | null;
   agentList: EvDirectAgentListItem[];
+  agentListUpdatedAt: number;
+  agentListFailed: boolean;
   phoneBook: EvTransferPhoneBookItem[];
   selectedAgentId: string | null;
   selectedPhoneBookIndex: number | null;

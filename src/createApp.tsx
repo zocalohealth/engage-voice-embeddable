@@ -1,6 +1,7 @@
 import { createSharedApp } from '@ringcentral-integration/next-core';
 import { getAppConfig } from './app/getAppConfig';
 import { parseUri } from './lib/Adapter/parseUri';
+import { sharedAppScope } from './lib/sharedAppScope';
 
 /**
  * Engage Voice Agent SDK configuration
@@ -129,6 +130,12 @@ export const createApp = async (
   }
   const appVersion = process.env.APP_VERSION;
 
+  const share = options ?? { name: 'cx-embeddable', type: 'Base' as const };
+  const search = typeof window !== 'undefined'
+    ? window.location.search
+    : typeof self !== 'undefined' ? self.location.search : '';
+  const scope = await sharedAppScope(search);
+
   const appConfig = getAppConfig({
     appVersion,
     prefix,
@@ -137,10 +144,7 @@ export const createApp = async (
     evAgentConfig: mergedEvAgentConfig,
     agentAssistantConfig,
     modules: additionalModules,
-    share: options ?? {
-      name: 'cx-embeddable',
-      type: 'Base',
-    },
+    share: { ...share, name: `${share.name}-${scope}` },
     analyticsKey,
     analyticsSecretKey,
     disableLoginPopup: urlParams.disableLoginPopup,
