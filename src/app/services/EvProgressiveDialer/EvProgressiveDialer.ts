@@ -55,10 +55,12 @@ export class EvProgressiveDialer extends RcModule {
     const initialize = () => {
       this.evAuth.beforeAgentLogout(async () => {
         await this.stop();
+        this.finishAttempt();
         this.attempted.clear();
       });
-      this.evAgentSession.onTriggerConfig(() => this.stop());
-      this.evCall.beforeManualDial(() => this.stop());
+      const abandonAttempt = async () => { await this.stop(); this.finishAttempt(); };
+      this.evAgentSession.onTriggerConfig(abandonAttempt);
+      this.evCall.beforeManualDial(abandonAttempt);
       this.evWorkingState.beforeChangeWorkingState(() => this.stop());
       this.evSubscription.subscribe(EvCallbackTypes.NEW_CALL, (call) => {
         if (this.pendingRequest && !this.callUii) {
@@ -72,7 +74,7 @@ export class EvProgressiveDialer extends RcModule {
                 .catch(() => this.logger.warn('progressiveDialer', { event: 'notificationFailed' }));
             }
           }
-          else void this.stop();
+          else { void this.stop(); this.finishAttempt(); }
         } else if (this.running && !this.pendingRequest) {
           void this.stop();
         }
@@ -80,7 +82,7 @@ export class EvProgressiveDialer extends RcModule {
       this.evSubscription.subscribe(EvCallbackTypes.END_CALL, (call) => {
         if (this.callUii && call.uii === this.callUii) {
           this.finishAttempt();
-          this.completedAt = Date.now();
+          this.completedAt = this.running ? Date.now() : 0;
         }
       });
       this.evSubscription.subscribe(EvCallbackTypes.PREVIEW_LEAD_STATE, (data) => {
@@ -88,7 +90,7 @@ export class EvProgressiveDialer extends RcModule {
           if (!this.callUii && this.evPresence.calls.length === 0) {
             this.evCall.setPhoneIdle();
             this.finishAttempt();
-            this.completedAt = Date.now();
+            this.completedAt = this.running ? Date.now() : 0;
           }
         }
       });
@@ -138,6 +140,9 @@ export class EvProgressiveDialer extends RcModule {
   @delegate('server')
   async start(): Promise<void> {
     if (this.running || !this.canStart) return;
+    this.finishAttempt();
+    this.completedAt = 0;
+    this.resumeRequestedAt = 0;
     const generation = ++this.generation;
     this.groupId = String(this.group.dialGroupId);
     this.connected = this.evPresence.isOffhook;
@@ -169,7 +174,7 @@ export class EvProgressiveDialer extends RcModule {
     clearInterval(this.timer);
     this.timer = undefined;
     this.deadline = 0;
-    this.finishAttempt();
+    // A sent lead still needs its completion callback after scheduling stops.
     this.completedAt = 0;
     this.resumeRequestedAt = 0;
     this.setState(false, 'stopped');

@@ -128,6 +128,51 @@ describe('progressive dialing', () => {
     expect(d.messages).toEqual([]);
   });
 
+  it.each(['NOANSWER', 'BUSY', 'HANGUP', 'DISCONNECT'])('allows restart after Stop, Away, and pending lead completion: %s', async (leadState) => {
+    const d = setup();
+    d.call.dialProgressiveLead.mockImplementation(async () => { d.call.isIdle = false; return true; });
+    d.call.setPhoneIdle.mockImplementation(() => { d.call.isIdle = true; });
+    await d.dialer.start();
+    await advance(3250);
+    await d.dialer.stop();
+    d.working.agentState.agentState = 'AWAY';
+    d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'AWAY' });
+    d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState });
+    d.working.agentState.agentState = 'AVAILABLE';
+    d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'AVAILABLE' });
+    expect(d.dialer.running).toBe(false);
+    expect(d.dialer.canStart).toBe(true);
+    expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear a newer manual dial when the stopped progressive lead finishes', async () => {
+    const d = setup();
+    await d.dialer.start();
+    await advance(3250);
+    await d.dialer.stop();
+    await d.call.beforeManualDial.mock.calls[0][0]();
+    d.call.isIdle = false;
+    d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'HANGUP' });
+    expect(d.call.setPhoneIdle).not.toHaveBeenCalled();
+    expect(d.dialer.canStart).toBe(false);
+  });
+
+  it('does not clear an active call or required disposition after stopping', async () => {
+    const d = setup();
+    await d.dialer.start();
+    await advance(3250);
+    await d.dialer.stop();
+    d.presence.calls = [{}];
+    d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'HANGUP' });
+    expect(d.call.setPhoneIdle).not.toHaveBeenCalled();
+    expect(d.dialer.canStart).toBe(false);
+    d.presence.calls = [];
+    d.working.isPendingDisposition = true;
+    d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'HANGUP' });
+    expect(d.dialer.canStart).toBe(false);
+    expect(d.working.isPendingDisposition).toBe(true);
+  });
+
   it('cancels the countdown when stopped', async () => {
     const d = setup();
     await d.dialer.start();
