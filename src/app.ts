@@ -1,3 +1,5 @@
+import { sharedAppSearch } from './lib/sharedAppScope';
+
 /**
  * Shared worker bootstrap.
  *
@@ -25,11 +27,7 @@ const loadWorker = () => {
   // (`readUrlParams` in createApp), so the page's params have to be forwarded
   // onto the worker URL — without them the worker falls back to defaults for
   // clientId, rcServer, jwt, enableAgentScript and the rest.
-  const params = new URLSearchParams(window.location.search);
-  // Volatile, page-only params are dropped: a SharedWorker is keyed by its URL,
-  // so leaving these in would spawn a fresh worker on every reload or popup.
-  ['_t', 'fromAdapter', 'fromPopup'].forEach((key) => params.delete(key));
-  const search = params.toString();
+  const search = sharedAppSearch(window.location.search);
 
   // `process.env.WORKER_URL` is the file webpack emits for `./worker.ts` — see
   // the `createWorker` reference below, which is what makes it emit at all.
