@@ -2,7 +2,7 @@ name: Deploy progressive dialer to Pages
 
 on:
   push:
-    branches: [codex/progressive-dialing]
+    branches: [1.x]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   build:
-    if: github.ref == 'refs/heads/codex/progressive-dialing'
+    if: github.ref == 'refs/heads/1.x'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
