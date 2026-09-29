@@ -6,13 +6,22 @@ jest.mock('@ringcentral-integration/next-core', () => ({
   state: () => undefined,
   storage: () => undefined,
   optional: () => () => undefined,
+  inject: () => () => undefined,
   watch: jest.fn(),
   RcModule: class { logger = { info: jest.fn(), warn: jest.fn(), error: jest.fn() }; },
   PortManager: class {},
 }));
 
+jest.mock('src/app/services/Analytics/track', () => ({
+  track: () => (_t: any, _k: string, descriptor: PropertyDescriptor) => descriptor,
+}));
+jest.mock('src/app/services/EvCall/i18n', () => ({ t: (key: string) => key }));
+
 import { Adapter } from 'src/app/services/Adapter';
 import { adapterMessageTypes } from 'src/enums';
+import { EvCall } from 'src/app/services/EvCall';
+import { EvClient } from 'src/app/services/EvClient';
+import { dialoutStatuses } from 'src/enums';
 import { EvWorkingState } from 'src/app/services/EvWorkingState';
 import { EvProgressiveDialer } from 'src/app/services/EvProgressiveDialer';
 import { EvCallbackTypes, evStatus } from 'src/app/services/EvClient/enums';
@@ -47,6 +56,35 @@ function setup(shared = false) {
   const port = { shared, onServer: jest.fn() };
   const dialer = new EvProgressiveDialer(client as any, auth as any, session as any, presence as any, working as any, call as any, leads as any, settings as any, subscription as any, adapter as any, port as any);
   return { dialer, client, auth, session, presence, working, call, leads, settings, adapter, listeners, port, messages, actualAdapter };
+}
+
+function setupRealSubmission() {
+  const d = setup();
+  const sdk = {
+    socket: { readyState: 1 },
+    previewDial: jest.fn(),
+    _getUIModel: () => ({ getInstance: () => ({
+      agentSettings: { isLoggedIn: true, currentState: 'AVAILABLE', isOffhook: true, onCall: false },
+      agentPermissions: { progressiveEnabled: true },
+      connectionSettings: { isPendingDisp: false },
+      outboundSettings: d.auth.agentConfig.outboundSettings,
+    }) }),
+  };
+  const client = Object.assign(Object.create(EvClient.prototype), { _sdk: sdk, appStatus: evStatus.CONNECTED });
+  const presence = Object.assign(d.presence, {
+    dialoutStatus: dialoutStatuses.idle,
+    setCurrentCallUii: jest.fn(),
+    setDialoutStatus: jest.fn((status) => { presence.dialoutStatus = status; }),
+  });
+  const call = Object.assign(Object.create(EvCall.prototype), {
+    evClient: client, evAuth: d.auth, evPresence: presence,
+    evAgentSession: d.session, evWorkingState: d.working,
+    evSettings: { isOffhook: true },
+  });
+  Object.defineProperty(d.call, 'isIdle', { get: () => call.isIdle });
+  d.call.dialProgressiveLead.mockImplementation(call.dialProgressiveLead.bind(call));
+  d.call.setPhoneIdle.mockImplementation(call.setPhoneIdle.bind(call));
+  return { ...d, sdk };
 }
 
 const advance = async (ms = 1000) => { await jest.advanceTimersByTimeAsync(ms); };
@@ -171,6 +209,84 @@ describe('progressive dialing', () => {
     d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'HANGUP' });
     expect(d.dialer.canStart).toBe(false);
     expect(d.working.isPendingDisposition).toBe(true);
+  });
+
+  it.each(['running', 'stopped', 'error'])('releases a %s attempt after a terminal result with a call ID but no live session', async (mode) => {
+    const d = setupRealSubmission();
+    if (mode === 'error') d.sdk.previewDial.mockImplementation(() => { throw new Error('send outcome unknown'); });
+    await d.dialer.start();
+    await advance(3250);
+    if (mode === 'stopped') await d.dialer.stop();
+    if (mode === 'error') expect(d.dialer.phase).toBe('error');
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    expect(d.call.isIdle).toBe(false);
+    d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'HANGUP' });
+    expect(d.presence.calls).toEqual([]);
+    expect(d.working.agentState.agentState).toBe('AVAILABLE');
+    expect(d.call.isIdle).toBe(true);
+    expect(d.dialer.canStart).toBe(true);
+    expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
+    await advance(1000);
+    expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
+    expect(d.dialer.running).toBe(mode === 'running');
+  });
+
+  it.each(['live call', 'disposition', 'TRANSITION', 'ENGAGED'])('retains the dialing lock after a terminal result while blocked by %s', async (blocker) => {
+    const d = setupRealSubmission();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    await d.dialer.stop();
+    if (blocker === 'live call') d.presence.calls = [{ uii: 'call-1' }];
+    if (blocker === 'disposition') d.working.isPendingDisposition = true;
+    if (blocker === 'TRANSITION' || blocker === 'ENGAGED') d.working.agentState.agentState = blocker;
+    d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'HANGUP' });
+    expect(d.call.isIdle).toBe(false);
+    expect(d.dialer.canStart).toBe(false);
+    expect(d.call.setPhoneIdle).not.toHaveBeenCalled();
+  });
+
+  it('settles a terminal result when Available arrives afterward without restarting the loop', async () => {
+    const d = setupRealSubmission();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    await d.dialer.stop();
+    d.working.agentState.agentState = 'TRANSITION';
+    d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'HANGUP' });
+    expect(d.call.isIdle).toBe(false);
+    d.working.agentState.agentState = 'AVAILABLE';
+    d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'AVAILABLE' });
+    expect(d.call.isIdle).toBe(true);
+    expect(d.dialer.canStart).toBe(true);
+    await advance(5000);
+    expect(d.dialer.running).toBe(false);
+    expect(d.call.dialProgressiveLead).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['no result', 'unrelated result', 'RINGING'])('keeps an unknown attempt locked after Available with %s', async (result) => {
+    const d = setupRealSubmission();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    await d.dialer.stop();
+    if (result === 'unrelated result') d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'other', leadState: 'HANGUP' });
+    if (result === 'RINGING') d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'RINGING' });
+    d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'AVAILABLE' });
+    expect(d.call.isIdle).toBe(false);
+    expect(d.dialer.canStart).toBe(false);
+  });
+
+  it('does not settle a terminal progressive result after a manual dial takes over', async () => {
+    const d = setupRealSubmission();
+    await d.dialer.start();
+    await advance(3250);
+    d.listeners[EvCallbackTypes.NEW_CALL]({ uii: 'call-1', callType: 'OUTBOUND' });
+    await d.call.beforeManualDial.mock.calls[0][0]();
+    d.listeners[EvCallbackTypes.PREVIEW_LEAD_STATE]({ requestId: 'request-1', leadState: 'HANGUP' });
+    d.listeners[EvCallbackTypes.AGENT_STATE]({ currentState: 'AVAILABLE' });
+    expect(d.call.isIdle).toBe(false);
+    expect(d.call.setPhoneIdle).not.toHaveBeenCalled();
   });
 
   it('cancels the countdown when stopped', async () => {

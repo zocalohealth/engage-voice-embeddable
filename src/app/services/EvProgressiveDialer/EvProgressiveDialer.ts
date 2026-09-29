@@ -31,6 +31,7 @@ export class EvProgressiveDialer extends RcModule {
   private pendingRequest = '';
   private notificationLead?: Lead;
   private callUii = '';
+  private terminalResultReceived = false;
   private sentAt = 0;
   private connected = false;
   private completedAt = 0;
@@ -87,14 +88,12 @@ export class EvProgressiveDialer extends RcModule {
       });
       this.evSubscription.subscribe(EvCallbackTypes.PREVIEW_LEAD_STATE, (data) => {
         if (data.requestId === this.pendingRequest && TERMINAL_LEAD_STATES.has(data.leadState)) {
-          if (!this.callUii && this.evPresence.calls.length === 0) {
-            this.evCall.setPhoneIdle();
-            this.finishAttempt();
-            this.completedAt = this.running ? Date.now() : 0;
-          }
+          this.terminalResultReceived = true;
+          this.settleTerminalAttempt();
         }
       });
       this.evSubscription.subscribe(EvCallbackTypes.AGENT_STATE, (data) => {
+        this.settleTerminalAttempt(data.currentState);
         if (this.running && !this.canContinueInState(data.currentState)) {
           void this.stop();
         }
@@ -191,8 +190,19 @@ export class EvProgressiveDialer extends RcModule {
     this.pendingRequest = '';
     this.notificationLead = undefined;
     this.callUii = '';
+    this.terminalResultReceived = false;
     this.sentAt = 0;
     this.deadline = 0;
+  }
+
+  private settleTerminalAttempt(agentState = this.evWorkingState.agentState?.agentState) {
+    if (!this.pendingRequest || !this.terminalResultReceived || this.evPresence.calls.length) return;
+    // NEW_CALL can arrive without a live session; require Available before releasing that lock.
+    if (this.callUii && (agentState !== 'AVAILABLE' || this.evWorkingState.isPendingDisposition)) return;
+    this.evCall.setPhoneIdle();
+    this.finishAttempt();
+    this.completedAt = this.running ? Date.now() : 0;
+    this.logger.info('progressiveDialer', { event: 'terminalAttemptCompleted' });
   }
 
   private fail() {
@@ -216,6 +226,7 @@ export class EvProgressiveDialer extends RcModule {
     const generation = this.generation;
     if (!this.isCurrent(generation)) { if (this.running) await this.stop(); return; }
     const agentState = this.evWorkingState.agentState?.agentState;
+    this.settleTerminalAttempt(agentState);
     if (!this.canContinueInState(agentState)) {
       await this.stop();
       return;
