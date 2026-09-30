@@ -1,3 +1,4 @@
+import type { WidgetDiagnosticAction } from '../../../lib/widgetDiagnostics';
 import { action, delegate, injectable, PortManager, RcModule, state } from '@ringcentral-integration/next-core';
 import { EvClient } from '../EvClient';
 import { EvCallbackTypes, evStatus } from '../EvClient/enums';
@@ -123,6 +124,23 @@ export class EvProgressiveDialer extends RcModule {
       !this.evLeads.loading;
   }
 
+  get diagnosticState() {
+    const blockers = {
+      not_enabled: !this.enabled,
+      session_not_ready: !this.sessionReady,
+      not_available: this.evWorkingState.agentState?.agentState !== 'AVAILABLE',
+      disposition: this.evWorkingState.isPendingDisposition,
+      active_call: this.evPresence.calls.length > 0,
+      dialing: !this.evCall.isIdle,
+      lead_fetch: this.evLeads.loading,
+    };
+    return {
+      hasPendingLead: Boolean(this.pendingRequest),
+      hasProgressiveCallId: Boolean(this.callUii),
+      startBlockedBy: Object.entries(blockers).filter(([, blocked]) => blocked).map(([reason]) => reason),
+    };
+  }
+
   private get sessionReady(): boolean {
     return this.evAuth.isEvLogged && this.evAgentSession.configSuccess &&
       !this.evAgentSession.configuring && this.evClient.appStatus === evStatus.CONNECTED;
@@ -163,7 +181,7 @@ export class EvProgressiveDialer extends RcModule {
       }
       if (this.isCurrent(generation)) void this.tick();
     } catch {
-      if (this.isCurrent(generation)) this.fail();
+      if (this.isCurrent(generation)) this.fail('phone_unavailable');
     }
   }
 
@@ -205,7 +223,8 @@ export class EvProgressiveDialer extends RcModule {
     this.logger.info('progressiveDialer', { event: 'terminalAttemptCompleted' });
   }
 
-  private fail() {
+  private fail(reason: NonNullable<WidgetDiagnosticAction['reason']>) {
+    void this.evClient.recordWidgetDiagnostic({ event: 'progressive_error', reason }).catch(() => {});
     void this.stop();
     this.setState(false, 'error');
     this.logger.warn('progressiveDialer', { event: 'failed' });
@@ -233,12 +252,12 @@ export class EvProgressiveDialer extends RcModule {
     }
     if (!this.evPresence.isOffhook) {
       if (this.connected) { await this.stop(); return; }
-      if (Date.now() >= this.deadline) this.fail();
+      if (Date.now() >= this.deadline) this.fail('offhook_timeout');
       return;
     }
     this.connected = true;
     if (this.pendingRequest) {
-      if (!this.callUii && Date.now() - this.sentAt >= 30000) this.fail();
+      if (!this.callUii && Date.now() - this.sentAt >= 30000) this.fail('call_start_timeout');
       return;
     }
     if (agentState === 'WORKING' && this.completedAt &&
@@ -247,14 +266,14 @@ export class EvProgressiveDialer extends RcModule {
       // Allow call-end and disposition callbacks to settle before resuming our own call loop.
       if (Date.now() - this.completedAt < 1000) return;
       if (this.resumeRequestedAt) {
-        if (Date.now() - this.resumeRequestedAt >= 10000) this.fail();
+        if (Date.now() - this.resumeRequestedAt >= 10000) this.fail('available_timeout');
         return;
       }
       this.resumeRequestedAt = Date.now();
       try {
         await this.evClient.setAgentState('AVAILABLE', 'Available');
       } catch {
-        if (this.isCurrent(generation)) this.fail();
+        if (this.isCurrent(generation)) this.fail('available_request_failed');
       }
       return;
     }
@@ -299,7 +318,7 @@ export class EvProgressiveDialer extends RcModule {
       this.logger.info('progressiveDialer', { event: 'dialRequested' });
     } catch {
       // A failed/ambiguous send is never retried automatically.
-      if (this.isCurrent(generation)) this.fail();
+      if (this.isCurrent(generation)) this.fail('dial_send_failed');
     }
   }
 
@@ -324,7 +343,7 @@ export class EvProgressiveDialer extends RcModule {
       this.deadline = Date.now() + (hasNextLead ? 0 : 5000);
       this.setState(true, hasNextLead ? 'waiting' : 'empty', hasNextLead ? 0 : 5);
     } catch {
-      if (this.isCurrent(generation)) this.fail();
+      if (this.isCurrent(generation)) this.fail('lead_fetch_failed');
     } finally {
       clearTimeout(timeout);
       this.fetching = false;

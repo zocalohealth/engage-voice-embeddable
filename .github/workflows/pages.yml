@@ -32,10 +32,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run test:unit -- --runInBand
+      - name: Record build time
+        run: node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, `WIDGET_BUILD_AT=${new Date().toISOString()}\n`)'
       - run: npm run build
+      - run: npm run test:startup
       - name: Record deployed revision
         run: |
-          node -e 'require("fs").writeFileSync("build/rc/build-info.json", JSON.stringify({commit: process.env.GITHUB_SHA, branch: process.env.GITHUB_REF_NAME}))'
+          node -e 'require("fs").writeFileSync("build/rc/build-info.json", JSON.stringify({version: require("./package.json").version, commit: process.env.GITHUB_SHA, branch: process.env.GITHUB_REF_NAME, builtAt: process.env.WIDGET_BUILD_AT}))'
       - uses: actions/upload-pages-artifact@v4
         with:
           path: build/rc

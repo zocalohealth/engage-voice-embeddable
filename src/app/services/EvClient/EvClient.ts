@@ -1,3 +1,5 @@
+import { diagnosticAgentState } from '../../../lib/widgetDiagnostics';
+import type { WidgetDiagnosticAction } from '../../../lib/widgetDiagnostics';
 import { waitUntilTo } from '../../../lib/utils';
 import {
   action,
@@ -847,9 +849,41 @@ class EvClient extends RcModule {
     onclose?.call(socket);
   }
 
+  addWidgetDiagnosticListener(listener: (action: WidgetDiagnosticAction) => void): void {
+    this._eventEmitter.on('widgetDiagnostic', listener);
+  }
+
+  @delegate('mainClient')
+  async recordWidgetDiagnostic(action: WidgetDiagnosticAction): Promise<void> {
+    try { this._eventEmitter.emit('widgetDiagnostic', action); } catch { /* Diagnostics must never block call control. */ }
+  }
+
+  @delegate('mainClient')
+  async getWidgetDiagnosticState() {
+    const model = this._uiModel;
+    return {
+      sdkAgentState: diagnosticAgentState(model?.agentSettings?.currentState),
+      socketReadyState: this._sdk?.socket?.readyState ?? null,
+      sdkOnCall: model?.agentSettings?.onCall === true || model?.agentSettings?.onCall === 'true',
+      sdkPendingDisposition: model?.connectionSettings?.isPendingDisp === true || model?.connectionSettings?.isPendingDisp === 'true',
+    };
+  }
+
+  private async sendDiagnosticCommand<T>(command: NonNullable<WidgetDiagnosticAction['command']>, send: () => T, hasCallIdentifier: boolean) {
+    void this.recordWidgetDiagnostic({ event: 'command_requested', command, hasCallIdentifier }).catch(() => {});
+    try {
+      const result = await send();
+      void this.recordWidgetDiagnostic({ event: 'command_dispatched', command, hasCallIdentifier }).catch(() => {});
+      return result;
+    } catch (error) {
+      void this.recordWidgetDiagnostic({ event: 'command_failed', command, hasCallIdentifier }).catch(() => {});
+      throw error;
+    }
+  }
+
   @delegate('mainClient')
   async hangup({ sessionId, resetPendingDisp = false }: EvClientHangUpParams) {
-    return this._sdk.hangup(sessionId, resetPendingDisp);
+    return this.sendDiagnosticCommand('hangup', () => this._sdk.hangup(sessionId, resetPendingDisp), Boolean(sessionId));
   }
 
   @delegate('mainClient')
@@ -899,7 +933,7 @@ class EvClient extends RcModule {
 
   @delegate('mainClient')
   async manualOutdialCancel(uii: string) {
-    await this._sdk.manualOutdialCancel(uii);
+    await this.sendDiagnosticCommand('manual_cancel', () => this._sdk.manualOutdialCancel(uii), Boolean(uii));
   }
 
   @delegate('mainClient')
@@ -911,7 +945,7 @@ class EvClient extends RcModule {
 
   @delegate('mainClient')
   async offhookTerm() {
-    await this._sdk.offhookTerm();
+    await this.sendDiagnosticCommand('offhook_term', () => this._sdk.offhookTerm(), false);
   }
 
   @delegate('mainClient')
@@ -1145,7 +1179,7 @@ class EvClient extends RcModule {
 
   @delegate('mainClient')
   async setAgentState(agentState: string, agentAuxState: string) {
-    return this._sdk.setAgentState(agentState, agentAuxState);
+    return this.sendDiagnosticCommand('agent_state', () => this._sdk.setAgentState(agentState, agentAuxState), false);
   }
 
   private _multiLoginRequest(): Promise<any> {
@@ -1429,7 +1463,7 @@ class EvClient extends RcModule {
         String(model?.outboundSettings?.outdialGroup?.dialGroupId) !== dialGroupId) {
       return false;
     }
-    this._sdk.previewDial(requestId, '', '');
+    await this.sendDiagnosticCommand('preview_dial', () => this._sdk.previewDial(requestId, '', ''), Boolean(requestId));
     return true;
   }
 

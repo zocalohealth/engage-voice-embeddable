@@ -34,7 +34,7 @@ const lead = (id = '1'): Lead => ({
 
 function setup(shared = false) {
   const listeners: Record<string, (data?: any) => void> = {};
-  const client = { setAgentState: jest.fn().mockResolvedValue(undefined), appStatus: evStatus.CONNECTED, getPreviewDial: jest.fn().mockResolvedValue({ leads: [lead()] }) };
+  const client = { recordWidgetDiagnostic: jest.fn().mockResolvedValue(undefined), setAgentState: jest.fn().mockResolvedValue(undefined), appStatus: evStatus.CONNECTED, getPreviewDial: jest.fn().mockResolvedValue({ leads: [lead()] }) };
   const auth = { isEvLogged: true, beforeAgentLogout: jest.fn(), agentPermissions: { allowOutbound: true, progressiveEnabled: true }, agentConfig: { outboundSettings: { outdialGroup: { dialGroupId: 'group-1', dialMode: 'PREVIEW', progressiveCallDelay: '3' } } } };
   const session = { configSuccess: true, configuring: false, onTriggerConfig: jest.fn() };
   const presence = { isManualOffhook: false, setIsManualOffhook: jest.fn(async (value) => { presence.isManualOffhook = value; }), isOffhook: true, isOffhooking: false, calls: [] as unknown[] };

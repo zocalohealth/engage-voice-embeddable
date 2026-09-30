@@ -39,6 +39,7 @@ import {
   TeamFilledMd,
 } from '@ringcentral/spring-icon';
 
+import { EvClient } from '../../services/EvClient';
 import { EvPresence } from '../../services/EvPresence';
 import { EvCall } from '../../services/EvCall';
 import { EvCallMonitor } from '../../services/EvCallMonitor';
@@ -105,6 +106,7 @@ class ActiveCallView extends RcViewModule {
     private toast: Toast,
     private storagePlugin: StoragePlugin,
     private portManager: PortManager,
+    private evClient: EvClient,
     @optional('ActiveCallViewOptions')
     private activeCallViewOptions?: ActiveCallViewOptions,
   ) {
@@ -374,6 +376,7 @@ class ActiveCallView extends RcViewModule {
 
   @delegate('server')
   async hangUp() {
+    void this.evClient.recordWidgetDiagnostic({ event: 'hangup_clicked' }).catch(() => {});
     if (this.currentCall?.session?.sessionId) {
       await this.evActiveCallControl.hangUp(this.currentCall.session.sessionId);
     }
@@ -385,6 +388,7 @@ class ActiveCallView extends RcViewModule {
    */
   @delegate('server')
   async hangupEveryone(sessionId: string) {
+    void this.evClient.recordWidgetDiagnostic({ event: 'hangup_clicked' }).catch(() => {});
     await this.evActiveCallControl.hangupSession({ sessionId });
   }
 
@@ -395,6 +399,7 @@ class ActiveCallView extends RcViewModule {
    */
   @delegate('server')
   async hangupTransferLeg(sessionId: string) {
+    void this.evClient.recordWidgetDiagnostic({ event: 'hangup_clicked' }).catch(() => {});
     await this.evActiveCallControl.hangUp(sessionId);
   }
 

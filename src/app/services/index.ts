@@ -30,3 +30,4 @@ export * from './OAuth';
 export * from './Redirect';
 export * from './EvSessionRecovery';
 export * from './EvProgressiveDialer';
+export { EvWidgetDiagnostics } from './EvWidgetDiagnostics/EvWidgetDiagnostics';

@@ -4,6 +4,8 @@ import { DefinePlugin, type RuleSetRule } from 'webpack';
 import { getBaseWebpackConfig, merge } from './src/lib/webpack/builder.webpack';
 import type { AppConfig } from './config';
 
+const buildTime = process.env.WIDGET_BUILD_AT || new Date().toISOString();
+
 const getCustomRules = (): RuleSetRule[] => [
   // Fix scss syntax error in widgets: `and(max-width` → `and (max-width`
   {
@@ -52,6 +54,9 @@ export const getWebpackConfig = (options: WebpackConfigOptions<AppConfig>) => {
     },
     plugins: [
       new DefinePlugin({
+        'process.env.WIDGET_BUILD_VERSION': JSON.stringify(projectConfig.appConfig.version.releaseVersion),
+        'process.env.WIDGET_BUILD_COMMIT': JSON.stringify(process.env.BUILD_HASH || 'local'),
+        'process.env.WIDGET_BUILD_AT': JSON.stringify(buildTime),
         // Adapter entry uses these env vars for building the app URL
         'process.env.HOSTING_URL': JSON.stringify(
           process.env.HOSTING_URL || '.',

@@ -17,6 +17,7 @@ import React, { useCallback } from 'react';
 import { EvAuth } from '../../services/EvAuth';
 import type { SettingsViewOptions, SettingsViewProps } from './SettingsView.interface';
 import i18n from './i18n';
+import { WidgetBuildInfo } from './WidgetBuildInfo';
 
 /**
  * Section component for grouping settings items
@@ -107,7 +108,6 @@ class SettingsView extends RcViewModule {
       await this.logout();
     }, []);
 
-    const version = this._options?.version || '1.0.0-beta';
 
     return (
       <>
@@ -138,11 +138,7 @@ class SettingsView extends RcViewModule {
             <Section label={t('general')}>
               <Line
                 data-sign="version"
-                endAdornment={
-                  <span className="typography-mainText text-neutral-b2">
-                    {version}
-                  </span>
-                }
+                endAdornment={<WidgetBuildInfo />}
               >
                 {t('version')}
               </Line>
