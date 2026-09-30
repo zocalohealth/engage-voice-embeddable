@@ -13,7 +13,7 @@ import {
 } from '@ringcentral-integration/next-core';
 import { EventEmitter } from 'events';
 
-import { AGENT_TYPES, messageTypes } from '../../../enums';
+import { AGENT_TYPES, agentStateTypes, messageTypes } from '../../../enums';
 import { EvTypeError } from '../../../lib/EvTypeError';
 import { _encodeSymbol } from '../../../lib/constant';
 import { evStatus, EvCallbackTypes } from './enums';
@@ -946,6 +946,21 @@ class EvClient extends RcModule {
   @delegate('mainClient')
   async offhookTerm() {
     await this.sendDiagnosticCommand('offhook_term', () => this._sdk.offhookTerm(), false);
+  }
+
+  /** Recheck the SDK at dispatch so a delayed server request cannot tear down a new call. */
+  @delegate('mainClient')
+  async disconnectIdleBreakAudio(): Promise<boolean> {
+    const model = this._uiModel;
+    const agent = model?.agentSettings;
+    const pending = model?.connectionSettings?.isPendingDisp;
+    if (this._sdk?.socket?.readyState !== 1 || agent?.currentState !== agentStateTypes.onBreak ||
+      (agent.onCall !== false && agent.onCall !== 'false') ||
+      (agent.callState !== null && agent.callState !== 'CALL-ENDED') ||
+      (pending !== false && pending !== 'false') ||
+      (agent.isOffhook !== true && agent.isOffhook !== 'true')) return false;
+    await this.sendDiagnosticCommand('offhook_term', () => this._sdk.offhookTerm(), false);
+    return true;
   }
 
   @delegate('mainClient')
