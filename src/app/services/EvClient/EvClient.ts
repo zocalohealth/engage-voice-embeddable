@@ -1,3 +1,5 @@
+import { diagnosticAgentState } from '../../../lib/widgetDiagnostics';
+import type { WidgetDiagnosticAction } from '../../../lib/widgetDiagnostics';
 import { waitUntilTo } from '../../../lib/utils';
 import {
   action,
@@ -11,7 +13,7 @@ import {
 } from '@ringcentral-integration/next-core';
 import { EventEmitter } from 'events';
 
-import { AGENT_TYPES, messageTypes } from '../../../enums';
+import { AGENT_TYPES, agentStateTypes, messageTypes } from '../../../enums';
 import { EvTypeError } from '../../../lib/EvTypeError';
 import { _encodeSymbol } from '../../../lib/constant';
 import { evStatus, EvCallbackTypes } from './enums';
@@ -847,9 +849,41 @@ class EvClient extends RcModule {
     onclose?.call(socket);
   }
 
+  addWidgetDiagnosticListener(listener: (action: WidgetDiagnosticAction) => void): void {
+    this._eventEmitter.on('widgetDiagnostic', listener);
+  }
+
+  @delegate('mainClient')
+  async recordWidgetDiagnostic(action: WidgetDiagnosticAction): Promise<void> {
+    try { this._eventEmitter.emit('widgetDiagnostic', action); } catch { /* Diagnostics must never block call control. */ }
+  }
+
+  @delegate('mainClient')
+  async getWidgetDiagnosticState() {
+    const model = this._uiModel;
+    return {
+      sdkAgentState: diagnosticAgentState(model?.agentSettings?.currentState),
+      socketReadyState: this._sdk?.socket?.readyState ?? null,
+      sdkOnCall: model?.agentSettings?.onCall === true || model?.agentSettings?.onCall === 'true',
+      sdkPendingDisposition: model?.connectionSettings?.isPendingDisp === true || model?.connectionSettings?.isPendingDisp === 'true',
+    };
+  }
+
+  private async sendDiagnosticCommand<T>(command: NonNullable<WidgetDiagnosticAction['command']>, send: () => T, hasCallIdentifier: boolean) {
+    void this.recordWidgetDiagnostic({ event: 'command_requested', command, hasCallIdentifier }).catch(() => {});
+    try {
+      const result = await send();
+      void this.recordWidgetDiagnostic({ event: 'command_dispatched', command, hasCallIdentifier }).catch(() => {});
+      return result;
+    } catch (error) {
+      void this.recordWidgetDiagnostic({ event: 'command_failed', command, hasCallIdentifier }).catch(() => {});
+      throw error;
+    }
+  }
+
   @delegate('mainClient')
   async hangup({ sessionId, resetPendingDisp = false }: EvClientHangUpParams) {
-    return this._sdk.hangup(sessionId, resetPendingDisp);
+    return this.sendDiagnosticCommand('hangup', () => this._sdk.hangup(sessionId, resetPendingDisp), Boolean(sessionId));
   }
 
   @delegate('mainClient')
@@ -899,7 +933,7 @@ class EvClient extends RcModule {
 
   @delegate('mainClient')
   async manualOutdialCancel(uii: string) {
-    await this._sdk.manualOutdialCancel(uii);
+    await this.sendDiagnosticCommand('manual_cancel', () => this._sdk.manualOutdialCancel(uii), Boolean(uii));
   }
 
   @delegate('mainClient')
@@ -911,7 +945,22 @@ class EvClient extends RcModule {
 
   @delegate('mainClient')
   async offhookTerm() {
-    await this._sdk.offhookTerm();
+    await this.sendDiagnosticCommand('offhook_term', () => this._sdk.offhookTerm(), false);
+  }
+
+  /** Recheck the SDK at dispatch so a delayed server request cannot tear down a new call. */
+  @delegate('mainClient')
+  async disconnectIdleBreakAudio(): Promise<boolean> {
+    const model = this._uiModel;
+    const agent = model?.agentSettings;
+    const pending = model?.connectionSettings?.isPendingDisp;
+    if (this._sdk?.socket?.readyState !== 1 || agent?.currentState !== agentStateTypes.onBreak ||
+      (agent.onCall !== false && agent.onCall !== 'false') ||
+      (agent.callState !== null && agent.callState !== 'CALL-ENDED') ||
+      (pending !== false && pending !== 'false') ||
+      (agent.isOffhook !== true && agent.isOffhook !== 'true')) return false;
+    await this.sendDiagnosticCommand('offhook_term', () => this._sdk.offhookTerm(), false);
+    return true;
   }
 
   @delegate('mainClient')
@@ -1145,7 +1194,7 @@ class EvClient extends RcModule {
 
   @delegate('mainClient')
   async setAgentState(agentState: string, agentAuxState: string) {
-    return this._sdk.setAgentState(agentState, agentAuxState);
+    return this.sendDiagnosticCommand('agent_state', () => this._sdk.setAgentState(agentState, agentAuxState), false);
   }
 
   private _multiLoginRequest(): Promise<any> {
@@ -1429,7 +1478,7 @@ class EvClient extends RcModule {
         String(model?.outboundSettings?.outdialGroup?.dialGroupId) !== dialGroupId) {
       return false;
     }
-    this._sdk.previewDial(requestId, '', '');
+    await this.sendDiagnosticCommand('preview_dial', () => this._sdk.previewDial(requestId, '', ''), Boolean(requestId));
     return true;
   }
 

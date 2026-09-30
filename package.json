@@ -8,7 +8,8 @@
     "start": "npm run gulp -- devServer --build-env local",
     "build": "npm run gulp -- build --build-env prod",
     "gulp": "gulp --gulpfile gulpfile.ts --require @ringcentral-integration/babel-settings/lib/register.js",
-    "test:unit": "jest --config jest.unit.config.js"
+    "test:unit": "jest --config jest.unit.config.js",
+    "test:startup": "node tests/widget-startup.cjs"
   },
   "license": "MIT",
   "devDependencies": {

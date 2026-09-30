@@ -7,6 +7,7 @@ import { ObjectMap } from '@ringcentral-integration/core/lib/ObjectMap';
 export const adapterMessageTypes = ObjectMap.prefixKeys(
   [
     'init',
+    'diagnostics',
     'register',
     'syncClosed',
     'syncMinimized',

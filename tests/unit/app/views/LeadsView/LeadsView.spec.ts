@@ -31,7 +31,7 @@ function setup() {
   const view = new LeadsView(
     { filteredLeads: [], loading: false } as any, progressive as any,
     { isDialing: false } as any, working as any, {} as any,
-    { agentConfig: {}, authenticateResponse: {} } as any, {} as any, {} as any,
+    { agentConfig: {}, authenticateResponse: {} } as any, { recordWidgetDiagnostic: jest.fn().mockResolvedValue(undefined) } as any, {} as any,
     { leadViewerEnabled: false } as any,
   );
   const render = () => renderToStaticMarkup(React.createElement(() => view.component()));

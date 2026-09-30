@@ -1,3 +1,5 @@
+import { WIDGET_BUILD } from '../../../lib/widgetDiagnostics';
+import type { WidgetDiagnosticPayload } from '../EvWidgetDiagnostics/EvWidgetDiagnostics';
 import { Toast } from '@ringcentral-integration/micro-core/src/app/services';
 import {
   action,
@@ -101,6 +103,9 @@ class Adapter extends RcModule {
    * Public transport for message communication
    */
   public transport!: MessageTransport;
+
+  private diagnosticInstanceId?: string;
+  private diagnosticSequence = 0;
 
   private _lastClosed: boolean = false;
   private _lastMinimized: boolean = false;
@@ -499,6 +504,20 @@ class Adapter extends RcModule {
     if ((window as any).toggleEnv) {
       (window as any).toggleEnv();
     }
+  }
+
+  @delegate('clients')
+  async onDiagnostics(diagnostic: WidgetDiagnosticPayload): Promise<void> {
+    if (!this.portManager?.isActiveTab || !this.transport) return;
+    this.diagnosticInstanceId ||= crypto.randomUUID();
+    const payload = {
+      schemaVersion: 1,
+      ...diagnostic,
+      build: WIDGET_BUILD,
+      instanceId: this.diagnosticInstanceId,
+      sequence: ++this.diagnosticSequence,
+    };
+    this._postExternalMessage({ type: this.messageTypes.diagnostics, diagnostic: payload });
   }
 
   @delegate('clients')

@@ -1,4 +1,4 @@
-import React, { ReactNode } from 'react';
+import React, { ReactNode, useEffect } from 'react';
 import {
   autobind,
   injectable,
@@ -39,6 +39,8 @@ import { InitializeAudioView } from './views/InitializeAudioView';
 import { SideWidgetView } from './views/SideWidgetView';
 
 import type { AppViewOptions } from '../interfaces';
+
+import { EvWidgetDiagnostics } from './services/EvWidgetDiagnostics/EvWidgetDiagnostics';
 
 /**
  * AppView - Root application view
@@ -175,6 +177,7 @@ class AppView extends RcViewModule {
     private _transferView: TransferView,
     private _activeCallListView: ActiveCallListView,
     private _callHistoryDetailView: CallHistoryDetailView,
+    private _widgetDiagnostics: EvWidgetDiagnostics,
     private _connectivityView: ConnectivityView,
     private _initializeAudioView: InitializeAudioView,
     private _sideWidgetView: SideWidgetView,
@@ -210,6 +213,7 @@ class AppView extends RcViewModule {
   }
 
   component() {
+    useEffect(() => { void this._widgetDiagnostics.report({ event: 'widget_loaded' }).catch(() => {}); }, []);
     return (
       <this._appRootView.component
         header={

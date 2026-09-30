@@ -295,6 +295,7 @@ class DialerView extends RcViewModule {
    */
   @delegate('server')
   async hangup(): Promise<void> {
+    void this.evClient.recordWidgetDiagnostic({ event: 'hangup_clicked' }).catch(() => {});
     const sessionId = this.evCallMonitor.calls[0]?.session?.sessionId;
     if (sessionId) {
       await this.evActiveCallControl.hangUp(sessionId);

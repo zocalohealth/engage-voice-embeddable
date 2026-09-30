@@ -190,7 +190,10 @@ class LeadsView extends RcViewModule {
                   progressiveRunning ? t('progressiveWaiting') : t('progressiveInstructions')}
               </div>
               <Button
-                onClick={() => progressiveRunning ? this.progressiveDialer.stop() : this.progressiveDialer.start()}
+                onClick={() => {
+                  void this.evClient.recordWidgetDiagnostic({ event: progressiveRunning ? 'progressive_stop_clicked' : 'progressive_start_clicked' }).catch(() => {});
+                  return progressiveRunning ? this.progressiveDialer.stop() : this.progressiveDialer.start();
+                }}
                 variant="outlined"
                 color="primary"
                 disabled={!progressiveRunning && !canStartProgressive}

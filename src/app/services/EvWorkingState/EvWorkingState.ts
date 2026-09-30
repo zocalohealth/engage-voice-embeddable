@@ -10,10 +10,12 @@ import {
   StoragePlugin,
   PortManager,
   delegate,
+  watch,
 } from '@ringcentral-integration/next-core';
 
 import {
   agentStateTypes,
+  dialoutStatuses,
   defaultAgentStateTexts,
   messageTypes,
 } from '../../../enums';
@@ -52,6 +54,8 @@ const DEFAULT_AGENT_STATE: AgentState = {
   name: 'EvWorkingState',
 })
 class EvWorkingState extends RcModule {
+  private breakAudioDisconnectRequested = false;
+
   private workingStateListeners: Array<() => void | Promise<void>> = [];
 
   beforeChangeWorkingState(listener: () => void | Promise<void>) {
@@ -260,7 +264,7 @@ class EvWorkingState extends RcModule {
     );
     this.evSubscription.subscribe(
       EvCallbackTypes.AGENT_STATE,
-      ({ currentState, currentAuxState }: {
+      async ({ currentState, currentAuxState }: {
         currentState: string;
         currentAuxState: string;
       }) => {
@@ -273,8 +277,47 @@ class EvWorkingState extends RcModule {
             agentAuxState: currentAuxState,
           });
         }
+        await this.disconnectIdleBreakAudio();
       },
     );
+    watch(
+      this,
+      () => [
+        this.agentState.agentState,
+        this.isPendingDisposition,
+        this.evPresence.isOffhook,
+        this.evPresence.isOffhooking,
+        this.evPresence.dialoutStatus,
+        this.evPresence.calls.length,
+        this.evClient.appStatus,
+      ] as const,
+      () => this.disconnectIdleBreakAudio(),
+      { multiple: true },
+    );
+    this.evSubscription.subscribe(EvCallbackTypes.OFFHOOK_TERM, (data) => {
+      if (data?.status !== 'OK') this.breakAudioDisconnectRequested = false;
+    });
+  }
+
+  private async disconnectIdleBreakAudio(): Promise<void> {
+    if (this.agentState.agentState !== agentStateTypes.onBreak || !this.evPresence.isOffhook) {
+      this.breakAudioDisconnectRequested = false;
+      return;
+    }
+    if (this.breakAudioDisconnectRequested || this.isPendingDisposition ||
+      this.evPresence.isOffhooking || this.evPresence.calls.length > 0 ||
+      this.evPresence.dialoutStatus !== dialoutStatuses.idle) return;
+    this.breakAudioDisconnectRequested = true;
+    try {
+      if (!await this.evClient.disconnectIdleBreakAudio()) {
+        this.breakAudioDisconnectRequested = false;
+        return;
+      }
+      this.logger.info('workingState', { event: 'idleBreakAudioDisconnectRequested' });
+    } catch {
+      this.breakAudioDisconnectRequested = false;
+      this.logger.warn('workingState', { event: 'idleBreakAudioDisconnectFailed' });
+    }
   }
 
   /**
